@@ -263,9 +263,45 @@ const initMap = async () => {
 }
 const centerOnUser = () => { if(userLocation.value && mapInstance) mapInstance.flyTo(userLocation.value, 15); }
 
+// ✨ 優化版：真實搜尋附近美食
 const searchNearby = async (item, idx) => { 
-    isSearchingRecs.value = true; searchTargetIndex.value = `${currentDayIdx.value}-${idx}`;
-    setTimeout(()=>{ recommendationsMap[`${currentDayIdx.value}-${idx}`] = [{name:'金賞壽司',lat:35.69,lon:139.70},{name:'琥珀咖啡',lat:35.692,lon:139.702}]; isSearchingRecs.value = false; searchTargetIndex.value=''; }, 800); 
+    // 1. 決定搜尋中心點 (優先順序：該行程地點 > 當日城市 > 全域目的地)
+    let targetLoc = item.location;
+    if (!targetLoc) targetLoc = currentDay.value.location;
+    if (!targetLoc) targetLoc = setup.value.destination;
+
+    if (!targetLoc) {
+        alert("請先輸入「地點」或「當日城市」，才能幫您搜尋附近美食喔！");
+        return;
+    }
+
+    isSearchingRecs.value = true; 
+    searchTargetIndex.value = `${currentDayIdx.value}-${idx}`; // 開啟 Loading 動畫
+
+    try {
+        // 2. 使用 Nominatim API 搜尋 "restaurants near [地點]"
+        const query = `restaurants near ${targetLoc}`;
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1`);
+        const data = await res.json();
+
+        if (data && data.length > 0) {
+            // 3. 格式化搜尋結果
+            recommendationsMap[`${currentDayIdx.value}-${idx}`] = data.map(place => ({
+                name: place.name || place.display_name.split(',')[0], // 嘗試只取店名
+                lat: parseFloat(place.lat),
+                lon: parseFloat(place.lon)
+            }));
+        } else {
+            recommendationsMap[`${currentDayIdx.value}-${idx}`] = [];
+            alert(`在「${targetLoc}」附近找不到餐廳，請嘗試輸入更明確的地點名稱 (例如：台北車站)。`);
+        }
+    } catch (e) {
+        console.error("搜尋美食失敗", e);
+        alert("搜尋服務暫時無法使用，請稍後再試。");
+    } finally {
+        isSearchingRecs.value = false; 
+        searchTargetIndex.value = ''; // 關閉 Loading
+    }
 }
 const applyRecommendation = (item, rec) => { item.activity = rec.name; item.location = rec.name; item.lat=rec.lat; item.lon=rec.lon; }
 
