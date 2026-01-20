@@ -9,23 +9,39 @@ const showTripMenu = ref(false)
 const tripList = ref([])
 const currentTripId = ref(null)
 const showSetupModal = ref(false)
-const setup = ref({ destination: 'Tokyo', currency: 'JPY', startDate: new Date().toISOString().split('T')[0], days: 5 })
+const setup = ref({ destination: '', currency: 'JPY', startDate: new Date().toISOString().split('T')[0], days: 5 })
 
 // --- Firebase Logic ---
 const generateId = () => 'trip_' + Date.now().toString(36)
 
 const createNewTrip = () => { 
+    // 預設空白地點，讓使用者之後再填
     setup.value = { destination: '', startDate: new Date().toISOString().split('T')[0], days: 5, currency: 'JPY' }; 
     showSetupModal.value = true; 
     showTripMenu.value = false; 
 }
 
 const initTrip = async () => {
-    if(!setup.value.destination) return alert('請輸入目的地');
+    // 🟢 移除地點必填檢查，允許空白
     const newId = generateId();
-    const newDays = Array.from({length: setup.value.days}, (_, i) => ({ date: `Day ${i+1}`, shortDate: `D${i+1}`, items: [] }));
-    await setDoc(doc(db, "trips", newId), { id: newId, destination: setup.value.destination, startDate: setup.value.startDate, daysCount: setup.value.days, createdAt: Date.now() });
-    await setDoc(doc(db, "trip_details", newId), { days: newDays, expenses: [], setup: setup.value, participants: ['我', '旅伴A'] });
+    const newDays = Array.from({length: setup.value.days}, (_, i) => ({ date: `Day ${i+1}`, items: [] }));
+    
+    // 建立行程資料
+    await setDoc(doc(db, "trips", newId), { 
+        id: newId, 
+        destination: setup.value.destination || '未命名行程', // 如果空白給個預設顯示
+        startDate: setup.value.startDate, 
+        daysCount: setup.value.days, 
+        createdAt: Date.now() 
+    });
+    
+    await setDoc(doc(db, "trip_details", newId), { 
+        days: newDays, 
+        expenses: [], 
+        setup: setup.value, // 這裡存入原始設定(可能是空地點)
+        participants: ['我', '旅伴A'] 
+    });
+
     currentTripId.value = newId;
     showSetupModal.value = false;
 }
@@ -97,7 +113,7 @@ onMounted(() => {
                 </div>
                 <div class="space-y-5">
                     <div>
-                        <label class="block text-xs font-bold text-slate-400 mb-1.5 ml-1 uppercase tracking-wider">目的地 Destination</label>
+                        <label class="block text-xs font-bold text-slate-400 mb-1.5 ml-1 uppercase tracking-wider">目的地 (可之後再填)</label>
                         <input v-model="setup.destination" type="text" placeholder="例如: Tokyo" class="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-5 py-4 text-dark font-black text-lg focus:border-primary focus:outline-none transition">
                     </div>
                     <div class="grid grid-cols-2 gap-4">

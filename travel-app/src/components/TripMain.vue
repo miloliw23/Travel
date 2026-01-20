@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, nextTick, reactive, onUnmounted } from 'vue'
 import L from 'leaflet'
 import { db } from '../firebase' 
-import { doc, onSnapshot, setDoc } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore'
 
 // 接收外部傳入的 ID
 const props = defineProps({
@@ -14,6 +14,7 @@ const viewMode = ref('plan')
 const currentDayIdx = ref(0)
 const showImportModal = ref(false)
 const importText = ref('')
+const isEditingTitle = ref(false)
 
 const days = ref([])
 const expenses = ref([])
@@ -22,7 +23,6 @@ const newExpense = ref({ item: '', amount: '', payer: '我' })
 const newParticipantName = ref('')
 const exchangeRate = ref(0.215)
 
-// 氣象狀態
 const weatherData = ref({ temp: null, code: null, loading: false, error: false })
 const setup = ref({ destination: '', currency: 'JPY', startDate: '', days: 1 })
 
@@ -31,12 +31,10 @@ let userMarker = null
 let geoWatchId = null
 let unsubscribe = null
 
-// 推薦搜尋
 const recommendationsMap = reactive({})
 const isSearchingRecs = ref(false)
 const searchTargetIndex = ref('')
 
-// 貨幣列表
 const currencyOptions = [
     { code: 'TWD', label: '新台幣', flag: '🇹🇼' },
     { code: 'JPY', label: '日圓', flag: '🇯🇵' },
@@ -50,18 +48,31 @@ const currencyOptions = [
 ]
 
 // --- Computed ---
-const currentDay = computed(() => days.value[currentDayIdx.value] || { items: [] })
+const currentDay = computed(() => days.value[currentDayIdx.value] || { items: [], location: '' })
 const totalExpense = computed(() => expenses.value.reduce((sum, item) => sum + item.amount, 0))
 const currencySymbol = computed(() => {
   const map = { 'TWD': 'NT$', 'JPY': '¥', 'CNY': '¥', 'USD': '$', 'EUR': '€', 'KRW': '₩', 'GBP': '£', 'HKD': 'HK$', 'THB': '฿', 'VND': '₫' }
   return map[setup.value.currency] || '$'
 })
 
-// 氣象顯示
+const getDateString = (dayIndex, formatType = 'short') => {
+    if (!setup.value.startDate) return '';
+    const date = new Date(setup.value.startDate);
+    date.setDate(date.getDate() + dayIndex);
+    
+    const mm = (date.getMonth() + 1).toString().padStart(2, '0');
+    const dd = date.getDate().toString().padStart(2, '0');
+    const yyyy = date.getFullYear();
+
+    if (formatType === 'full') return `${yyyy}/${mm}/${dd}`;
+    return `${mm}/${dd}`;
+}
+
 const weatherDisplay = computed(() => {
     if (weatherData.value.loading) return { temp: '...', icon: 'ph-spinner animate-spin', label: '載入中...' };
-    if (weatherData.value.error) return null; 
+    if (weatherData.value.error) return null;
     if (weatherData.value.temp === null) return null;
+    
     const code = weatherData.value.code;
     let icon = 'ph-sun';
     if (code >= 1 && code <= 3) icon = 'ph-cloud-sun';
@@ -70,10 +81,10 @@ const weatherDisplay = computed(() => {
     else if (code >= 71 && code <= 77) icon = 'ph-snowflake';
     else if (code >= 80 && code <= 82) icon = 'ph-cloud-rain';
     else if (code >= 95) icon = 'ph-lightning';
-    return { temp: `${Math.round(weatherData.value.temp)}°C`, icon: icon, label: setup.value.destination };
+    
+    return { temp: `${Math.round(weatherData.value.temp)}°C`, icon: icon, label: currentDay.value.location };
 })
 
-// 分帳邏輯
 const settlementPlan = computed(() => {
     if (totalExpense.value === 0 || participants.value.length === 0) return [];
     const paidMap = {};
@@ -96,7 +107,6 @@ const settlementPlan = computed(() => {
     return debts;
 })
 
-// --- Helpers ---
 const getTimePeriod = (t) => { if(!t) return '時間'; const h=parseInt(t.split(':')[0]); return h<5?'凌晨':h<11?'上午':h<14?'中午':h<18?'下午':'晚上'; }
 const getDotColor = (t) => {
     switch(t) { 
@@ -106,14 +116,20 @@ const getDotColor = (t) => {
         default: return 'bg-primary border-primary/30'
     }
 }
-const updateDate = (e, day) => {
-    const val = e.target.value; if(!val) return;
-    day.fullDate = val; const d = new Date(val);
-    const mm = d.getMonth()+1; const dd = d.getDate();
-    day.date = `${mm}/${dd}`; day.shortDate = `${mm}/${dd}`;
+
+// 更新全域標題 & 同步到左側選單
+const updateDestination = async () => {
+    isEditingTitle.value = false;
+    // 這裡只存標題，不再觸發天氣驗證，因為天氣只跟「當日地點」有關
+    if (props.tripId) {
+        try {
+            await updateDoc(doc(db, "trips", props.tripId), {
+                destination: setup.value.destination
+            });
+        } catch (e) { console.error("同步標題失敗", e); }
+    }
 }
 
-// --- API & Logic ---
 const fetchExchangeRate = async () => {
     if(!setup.value.currency || setup.value.currency === 'TWD') { exchangeRate.value = 1; return; }
     try {
@@ -131,43 +147,72 @@ const fetchWeather = async (lat, lon) => {
     } catch (e) { }
 }
 
-const validateLocation = async () => {
-    if(!setup.value.destination) return;
+// ✨ 智慧天氣驗證：完全與標題脫鉤
+const validateWeather = async () => {
+    const targetLocation = currentDay.value.location;
+    
+    // 🔴 狀態一：沒有輸入 (空值)
+    if(!targetLocation || targetLocation.trim() === '') {
+        weatherData.value = { temp: null, code: null, loading: false, error: false }; // error: false 代表不是錯誤，只是沒填
+        return;
+    }
+    
     weatherData.value.loading = true;
     weatherData.value.error = false;
+    
     try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(setup.value.destination)}&limit=3&addressdetails=1`);
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(targetLocation)}&limit=3&addressdetails=1`);
         const data = await res.json();
+        
         if (data.length === 0) {
+            // 🔴 狀態二：輸入了，但找不到 (錯誤)
             weatherData.value.error = true;
         } else {
+            // 嚴格過濾：必須是城市或行政區
             const isValid = data.some(place => {
                 const validClasses = ['place', 'boundary', 'landuse', 'tourism'];
-                const validTypes = ['city', 'administrative', 'country', 'state', 'town', 'island', 'province', 'region', 'county', 'district', 'municipality', 'village', 'suburb'];
+                const validTypes = [
+                    'city', 'administrative', 'country', 'state', 'town', 'island', 
+                    'province', 'region', 'county', 'district', 'municipality', 'village', 'suburb',
+                    'capital', 'hamlet'
+                ];
                 return validClasses.includes(place.class) || validTypes.includes(place.type);
             });
+
             if (isValid) {
+                // 🟢 狀態三：成功抓到
                 await fetchWeather(data[0].lat, data[0].lon);
                 weatherData.value.error = false;
-            } else { weatherData.value.error = true; }
+            } else { 
+                // 🔴 狀態二：輸入了亂碼或非地名 (錯誤)
+                weatherData.value.error = true; 
+            }
         }
-    } catch (e) {} finally { weatherData.value.loading = false; }
+    } catch (e) {
+        weatherData.value.error = true;
+    } finally { 
+        weatherData.value.loading = false; 
+    }
 }
 
-// 監聽變更
 watch(() => setup.value.currency, () => fetchExchangeRate());
-watch(() => setup.value.destination, () => setTimeout(() => validateLocation(), 800));
 
-// --- Actions ---
+// 只監聽「當日地點」的變化，不再監聽標題
+let debounceTimer = null;
+watch(() => currentDay.value.location, () => {
+    if(debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => validateWeather(), 800);
+});
+watch(currentDayIdx, () => setTimeout(() => validateWeather(), 200));
+
 const addParticipant = () => { if (newParticipantName.value && !participants.value.includes(newParticipantName.value)) { participants.value.push(newParticipantName.value); newParticipantName.value = ''; }}
 const removeParticipant = (name) => { if (confirm('確定移除?')) participants.value = participants.value.filter(p => p !== name); }
 const addItem = () => currentDay.value.items.push({ time: '', type: 'spot', activity: '', location: '' })
 const removeItem = (idx) => currentDay.value.items.splice(idx, 1)
-const addDay = () => days.value.push({ date: `Day ${days.value.length+1}`, shortDate: `D${days.value.length+1}`, items: [] })
+const addDay = () => days.value.push({ date: `Day ${days.value.length+1}`, items: [], location: '' })
 const addExpense = () => { if(newExpense.value.item && newExpense.value.amount) { expenses.value.unshift({...newExpense.value}); newExpense.value.item=''; newExpense.value.amount=''; }}
 const removeExpense = (idx) => expenses.value.splice(idx, 1)
 
-// 匯入
 const parseAndImport = () => {
     if (!importText.value) return;
     const blocks = importText.value.split('=====');
@@ -224,16 +269,13 @@ const searchNearby = async (item, idx) => {
 }
 const applyRecommendation = (item, rec) => { item.activity = rec.name; item.location = rec.name; item.lat=rec.lat; item.lon=rec.lon; }
 
-// --- Watchers for Local Logic ---
 watch(viewMode, (v) => { if(v === 'map') initMap(); })
 watch(currentDayIdx, () => { if(viewMode.value === 'map') initMap(); })
 
-// --- 自動存檔 (只存這個元件的資料) ---
 let saveTimeout = null;
 watch([days, expenses, setup, participants], () => {
     if(saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(async () => {
-        // 確保真的有資料才存，避免覆蓋成空的
         if(props.tripId) {
             await setDoc(doc(db, "trip_details", props.tripId), { 
                 days: days.value, 
@@ -245,9 +287,7 @@ watch([days, expenses, setup, participants], () => {
     }, 1000);
 }, { deep: true })
 
-// --- 生命週期 ---
 onMounted(() => {
-    // 監聽 Firebase 資料
     unsubscribe = onSnapshot(doc(db, "trip_details", props.tripId), (docSnap) => {
         if (docSnap.exists()) {
             const data = docSnap.data();
@@ -255,15 +295,12 @@ onMounted(() => {
             expenses.value = data.expenses || [];
             setup.value = data.setup || setup.value;
             participants.value = data.participants || ['我', '旅伴A'];
-            // 資料載入後再驗證地點
-            validateLocation();
+            validateWeather();
         }
     });
 })
 
-onUnmounted(() => {
-    if(unsubscribe) unsubscribe(); // 銷毀元件時，停止監聽
-})
+onUnmounted(() => { if(unsubscribe) unsubscribe(); })
 </script>
 
 <template>
@@ -275,10 +312,11 @@ onUnmounted(() => {
                     <button @click="$emit('openMenu')" class="text-white/80 hover:text-white transition active:scale-95">
                         <i class="ph-bold ph-list text-2xl"></i>
                     </button>
-                    <div class="overflow-hidden">
-                        <h1 class="text-[1.35rem] font-black tracking-wider flex items-center gap-2 truncate text-white drop-shadow-sm">
-                            {{ setup.destination || '旅程規劃' }} 
-                        </h1>
+                    <div class="overflow-hidden flex-1">
+                        <div v-if="!isEditingTitle" @click="isEditingTitle = true" class="text-[1.35rem] font-black tracking-wider flex items-center gap-2 truncate text-white drop-shadow-sm cursor-pointer hover:opacity-90">
+                            {{ setup.destination || '點擊設定地點' }} <i class="ph-bold ph-pencil-simple text-sm opacity-50"></i>
+                        </div>
+                        <input v-else v-model="setup.destination" @blur="updateDestination" @keyup.enter="updateDestination" class="text-[1.35rem] font-black tracking-wider bg-transparent text-white border-b-2 border-white/50 focus:border-white focus:outline-none w-full" autoFocus>
                     </div>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
@@ -291,7 +329,7 @@ onUnmounted(() => {
             </div>
             <div class="flex overflow-x-auto hide-scroll px-3 pb-4 space-x-3 snap-x relative z-10">
                 <div v-for="(day, index) in days" :key="index" @click="currentDayIdx = index" class="snap-center shrink-0 flex flex-col items-center justify-center w-14 h-16 rounded-2xl cursor-pointer transition-all border-[1.5px]" :class="currentDayIdx === index ? 'bg-white text-primary border-white shadow-lg scale-105 font-bold' : 'bg-white/20 text-white border-transparent hover:bg-white/30'">
-                    <span class="text-[10px] opacity-90">{{ day.shortDate }}</span>
+                    <span class="text-[10px] opacity-90">{{ getDateString(index, 'short') }}</span>
                     <span class="text-lg leading-tight">D{{ index + 1 }}</span>
                 </div>
                 <button @click="addDay" class="shrink-0 w-12 h-16 rounded-2xl flex items-center justify-center border-2 border-white/50 border-dashed text-white hover:bg-white/10 transition active:scale-95"><i class="ph-bold ph-plus text-xl"></i></button>
@@ -304,17 +342,32 @@ onUnmounted(() => {
                     <div class="bg-white p-5 rounded-[20px] shadow-premium-sm mb-6 border border-slate-100/80 flex flex-col relative overflow-hidden">
                         <div class="absolute -top-10 -right-10 w-32 h-32 bg-primary/5 rounded-full blur-2xl pointer-events-none"></div>
                         <div class="flex justify-between items-start mb-2 relative z-10">
-                            <div class="flex-1">
-                                <div class="relative inline-block">
-                                    <input type="date" :value="currentDay.fullDate" @change="updateDate($event, currentDay)" class="absolute inset-0 opacity-0 z-10 cursor-pointer">
-                                    <div class="text-2xl font-black text-dark flex items-center gap-2 cursor-pointer relative z-0">{{ currentDay.date || '設定日期' }} <i class="ph-bold ph-caret-down text-sm text-slate-300"></i></div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-2xl font-black text-dark flex items-center gap-3 relative z-0 mb-1">
+                                    Day {{ currentDayIdx + 1 }}
+                                    <span class="text-base text-slate-400 font-medium">{{ getDateString(currentDayIdx, 'full') }}</span>
                                 </div>
-                                <input v-model="currentDay.title" class="relative z-20 text-sm font-medium text-slate-500 w-full bg-transparent border-b border-transparent focus:border-primary focus:outline-none placeholder-slate-300 mt-1" placeholder="輸入當日主題">
+                                <input v-model="currentDay.title" class="relative z-20 text-sm font-medium text-slate-500 w-full bg-transparent border-b border-transparent focus:border-primary focus:outline-none placeholder-slate-300 mb-2" placeholder="輸入當日主題">
+                                <div class="flex items-center gap-2">
+                                    <i class="ph-fill ph-map-pin-line text-slate-400"></i>
+                                    <input v-model="currentDay.location" class="text-xs font-bold text-primary bg-slate-50 px-2 py-1 rounded-lg border-none focus:ring-1 focus:ring-primary w-32" placeholder="此處輸入城市 (如: 大阪)">
+                                </div>
                             </div>
-                            <button @click="showImportModal = true" class="flex flex-col items-center text-primary hover:text-primary-dark transition"><i class="ph-duotone ph-file-text text-2xl"></i><span class="text-[10px] font-bold">匯入</span></button>
+                            
+                            <div class="flex flex-col items-end gap-2">
+                                <button @click="showImportModal = true" class="flex flex-col items-center text-primary hover:text-primary-dark transition"><i class="ph-duotone ph-file-text text-2xl"></i><span class="text-[10px] font-bold">匯入</span></button>
+                                
+                                <div v-if="!currentDay.location" class="flex items-center gap-2 text-slate-400 font-bold text-sm bg-slate-100 px-2 py-1 rounded-lg mt-1 whitespace-nowrap">
+                                    <i class="ph-bold ph-map-pin-line"></i><span>沒有輸入城市</span>
+                                </div>
+                                <div v-else-if="weatherData.error" class="flex items-center gap-2 text-red-500 font-bold text-sm bg-red-50 px-2 py-1 rounded-lg mt-1 whitespace-nowrap">
+                                    <i class="ph-bold ph-warning-circle"></i><span>未輸入正確地點</span>
+                                </div>
+                                <div v-else-if="weatherDisplay" class="flex items-center gap-2 text-primary font-bold text-sm bg-primary/5 px-2 py-1 rounded-lg mt-1 whitespace-nowrap">
+                                    <i :class="['ph-duotone', weatherDisplay.icon]"></i><span>{{ weatherDisplay.temp }} {{ weatherDisplay.label }}</span>
+                                </div>
+                            </div>
                         </div>
-                        <div v-if="weatherData.error" class="flex items-center gap-2 text-red-500 font-bold text-sm bg-red-50 self-start px-2 py-1 rounded-lg"><i class="ph-bold ph-warning-circle"></i><span>地點錯誤</span></div>
-                        <div v-else-if="weatherDisplay" class="flex items-center gap-2 text-primary font-bold text-sm bg-primary/5 self-start px-2 py-1 rounded-lg"><i :class="['ph-duotone', weatherDisplay.icon]"></i><span>{{ weatherDisplay.temp }} {{ weatherDisplay.label }}</span></div>
                     </div>
 
                     <div class="relative pl-5 border-l-[3px] border-primary/20 space-y-6">
