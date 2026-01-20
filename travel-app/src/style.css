@@ -1,3 +1,87 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* 基礎設定 */
+body {
+    background-color: #f8fafc;
+    /* 背景改極淺灰，襯托金色 */
+    margin: 0;
+    overflow: hidden;
+}
+
+/* 隱藏捲軸 */
+.hide-scroll::-webkit-scrollbar {
+    display: none;
+}
+
+.hide-scroll {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+/* 地圖修正 */
+#map {
+    z-index: 0;
+    isolation: isolate;
+    background: #e2e8f0;
+}
+
+.leaflet-container {
+    z-index: 0;
+}
+
+/* 動畫設定 */
+.fade-enter-active,
+.fade-leave-active {
+    transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+    opacity: 0;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.slide-enter-from,
+.slide-leave-to {
+    transform: translateX(-100%);
+}
+
+/* 脈衝定位點 (紅色) */
+.gps-pulse {
+    width: 14px;
+    height: 14px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    background-color: #be123c;
+    box-shadow: 0 0 0 4px rgba(190, 18, 60, 0.4);
+    animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-red {
+    0% {
+        box-shadow: 0 0 0 0 rgba(190, 18, 60, 0.7);
+    }
+
+    70% {
+        box-shadow: 0 0 0 10px rgba(190, 18, 60, 0);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(190, 18, 60, 0);
+    }
+}
+
+/* iOS 安全區域設定 */
+.pt-safe-top {
+    padding-top: env(safe-area-inset-top);
+}
+
+.pb-safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+}
