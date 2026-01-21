@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { db } from './firebase' 
 import { collection, doc, setDoc, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore'
 import TripMain from './components/TripMain.vue'
+import draggable from 'vuedraggable' // ✨ 引入拖拉套件
 
 // --- 狀態定義 ---
 const showTripMenu = ref(false)
@@ -15,21 +16,18 @@ const setup = ref({ destination: '', currency: 'JPY', startDate: new Date().toIS
 const generateId = () => 'trip_' + Date.now().toString(36)
 
 const createNewTrip = () => { 
-    // 預設空白地點，讓使用者之後再填
     setup.value = { destination: '', startDate: new Date().toISOString().split('T')[0], days: 5, currency: 'JPY' }; 
     showSetupModal.value = true; 
     showTripMenu.value = false; 
 }
 
 const initTrip = async () => {
-    // 🟢 移除地點必填檢查，允許空白
     const newId = generateId();
     const newDays = Array.from({length: setup.value.days}, (_, i) => ({ date: `Day ${i+1}`, items: [] }));
     
-    // 建立行程資料
     await setDoc(doc(db, "trips", newId), { 
         id: newId, 
-        destination: setup.value.destination || '未命名行程', // 如果空白給個預設顯示
+        destination: setup.value.destination || '未命名行程', 
         startDate: setup.value.startDate, 
         daysCount: setup.value.days, 
         createdAt: Date.now() 
@@ -38,7 +36,7 @@ const initTrip = async () => {
     await setDoc(doc(db, "trip_details", newId), { 
         days: newDays, 
         expenses: [], 
-        setup: setup.value, // 這裡存入原始設定(可能是空地點)
+        setup: setup.value, 
         participants: ['我', '旅伴A'] 
     });
 
@@ -92,12 +90,17 @@ onMounted(() => {
                     <button @click="createNewTrip" class="w-full py-4 mb-6 border-[3px] border-dashed border-primary/40 text-primary rounded-2xl font-black hover:bg-primary/5 flex items-center justify-center gap-2 active:scale-[0.98] transition">
                         <i class="ph-bold ph-plus-circle text-xl"></i> 建立新旅程
                     </button>
+                    
                     <div class="flex-1 overflow-y-auto space-y-3 hide-scroll">
-                        <div v-for="trip in tripList" :key="trip.id" @click="switchTrip(trip.id)" class="p-4 rounded-2xl border-2 transition cursor-pointer relative group" :class="currentTripId === trip.id ? 'bg-primary/5 border-primary shadow-sm' : 'bg-slate-50 border-transparent hover:bg-slate-100'">
-                            <div class="font-black text-dark text-lg">{{ trip.destination || '未命名行程' }}</div>
-                            <div class="text-xs font-bold text-slate-400 mt-1">{{ trip.startDate }} • {{ trip.daysCount }} 天</div>
-                            <button v-if="tripList.length > 1" @click.stop="deleteTrip(trip.id)" class="absolute right-3 top-3 text-slate-300 hover:text-accent p-2"><i class="ph-bold ph-trash text-lg"></i></button>
-                        </div>
+                        <draggable v-model="tripList" item-key="id" class="space-y-3">
+                            <template #item="{ element }">
+                                <div @click="switchTrip(element.id)" class="p-4 rounded-2xl border-2 transition cursor-pointer relative group" :class="currentTripId === element.id ? 'bg-primary/5 border-primary shadow-sm' : 'bg-slate-50 border-transparent hover:bg-slate-100'">
+                                    <div class="font-black text-dark text-lg">{{ element.destination || '未命名行程' }}</div>
+                                    <div class="text-xs font-bold text-slate-400 mt-1">{{ element.startDate }} • {{ element.daysCount }} 天</div>
+                                    <button v-if="tripList.length > 1" @click.stop="deleteTrip(element.id)" class="absolute right-3 top-3 text-slate-300 hover:text-accent p-2"><i class="ph-bold ph-trash text-lg"></i></button>
+                                </div>
+                            </template>
+                        </draggable>
                     </div>
                 </div>
                 <div class="flex-1 bg-dark/60 backdrop-blur-sm z-40" @click="showTripMenu = false"></div>

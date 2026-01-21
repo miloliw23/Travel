@@ -12,7 +12,8 @@
         "@phosphor-icons/web": "^2.1.2",
         "firebase": "^12.8.0",
         "leaflet": "^1.9.4",
-        "vue": "^3.4.0"
+        "vue": "^3.4.0",
+        "vuedraggable": "^4.1.0"
     },
     "devDependencies": {
         "@vitejs/plugin-vue": "^5.0.0",

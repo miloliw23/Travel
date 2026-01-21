@@ -1,10 +1,9 @@
 <script setup>
 import { ref, computed, watch, onMounted, nextTick, reactive, onUnmounted } from 'vue'
-import L from 'leaflet'
 import { db } from '../firebase' 
 import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore'
+import draggable from 'vuedraggable'
 
-// 接收外部傳入的 ID
 const props = defineProps({
   tripId: { type: String, required: true }
 })
@@ -87,22 +86,47 @@ const weatherDisplay = computed(() => {
 
 const settlementPlan = computed(() => {
     if (totalExpense.value === 0 || participants.value.length === 0) return [];
+    
     const paidMap = {};
     participants.value.forEach(p => paidMap[p] = 0);
-    expenses.value.forEach(exp => { if (paidMap[exp.payer] !== undefined) paidMap[exp.payer] += exp.amount; });
-    const average = totalExpense.value / participants.value.length;
-    let balances = participants.value.map(p => ({ name: p, balance: paidMap[p] - average }));
+    expenses.value.forEach(exp => { 
+        if (paidMap[exp.payer] !== undefined) paidMap[exp.payer] += exp.amount; 
+    });
+
+    const total = totalExpense.value;
+    const count = participants.value.length;
+    let balances = participants.value.map(p => ({
+        name: p,
+        balance: paidMap[p] - (total / count) 
+    }));
+
+    let balanceSum = 0;
+    balances.forEach(b => {
+        b.balance = Math.round(b.balance);
+        balanceSum += b.balance;
+    });
+
+    if (balanceSum !== 0) {
+        const maxCreditor = balances.reduce((prev, current) => (prev.balance > current.balance) ? prev : current);
+        maxCreditor.balance -= balanceSum;
+    }
+
     const debts = [];
-    let debtors = balances.filter(b => b.balance < -1).sort((a, b) => a.balance - b.balance);
-    let creditors = balances.filter(b => b.balance > 1).sort((a, b) => b.balance - a.balance);
+    let debtors = balances.filter(b => b.balance < 0).sort((a, b) => a.balance - b.balance);
+    let creditors = balances.filter(b => b.balance > 0).sort((a, b) => b.balance - a.balance);
+
     let i = 0; let j = 0;
     while (i < debtors.length && j < creditors.length) {
-        let debtor = debtors[i]; let creditor = creditors[j];
+        let debtor = debtors[i];
+        let creditor = creditors[j];
         let amount = Math.min(Math.abs(debtor.balance), creditor.balance);
-        if (amount > 0) { debts.push({ from: debtor.name, to: creditor.name, amount: Math.round(amount) }); }
-        debtor.balance += amount; creditor.balance -= amount;
-        if (Math.abs(debtor.balance) < 1) i++;
-        if (creditor.balance < 1) j++;
+        if (amount > 0) {
+            debts.push({ from: debtor.name, to: creditor.name, amount: amount });
+        }
+        debtor.balance += amount;
+        creditor.balance -= amount;
+        if (Math.abs(debtor.balance) < 0.9) i++;
+        if (creditor.balance < 0.9) j++;
     }
     return debts;
 })
@@ -117,10 +141,8 @@ const getDotColor = (t) => {
     }
 }
 
-// 更新全域標題 & 同步到左側選單
 const updateDestination = async () => {
     isEditingTitle.value = false;
-    // 這裡只存標題，不再觸發天氣驗證，因為天氣只跟「當日地點」有關
     if (props.tripId) {
         try {
             await updateDoc(doc(db, "trips", props.tripId), {
@@ -147,44 +169,29 @@ const fetchWeather = async (lat, lon) => {
     } catch (e) { }
 }
 
-// ✨ 智慧天氣驗證：完全與標題脫鉤
 const validateWeather = async () => {
     const targetLocation = currentDay.value.location;
-    
-    // 🔴 狀態一：沒有輸入 (空值)
     if(!targetLocation || targetLocation.trim() === '') {
-        weatherData.value = { temp: null, code: null, loading: false, error: false }; // error: false 代表不是錯誤，只是沒填
+        weatherData.value = { temp: null, code: null, loading: false, error: false }; 
         return;
     }
-    
     weatherData.value.loading = true;
     weatherData.value.error = false;
-    
     try {
         const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(targetLocation)}&limit=3&addressdetails=1`);
         const data = await res.json();
-        
         if (data.length === 0) {
-            // 🔴 狀態二：輸入了，但找不到 (錯誤)
             weatherData.value.error = true;
         } else {
-            // 嚴格過濾：必須是城市或行政區
             const isValid = data.some(place => {
                 const validClasses = ['place', 'boundary', 'landuse', 'tourism'];
-                const validTypes = [
-                    'city', 'administrative', 'country', 'state', 'town', 'island', 
-                    'province', 'region', 'county', 'district', 'municipality', 'village', 'suburb',
-                    'capital', 'hamlet'
-                ];
+                const validTypes = ['city', 'administrative', 'country', 'state', 'town', 'island', 'province', 'region', 'county', 'district', 'municipality', 'village', 'suburb', 'capital', 'hamlet'];
                 return validClasses.includes(place.class) || validTypes.includes(place.type);
             });
-
             if (isValid) {
-                // 🟢 狀態三：成功抓到
                 await fetchWeather(data[0].lat, data[0].lon);
                 weatherData.value.error = false;
             } else { 
-                // 🔴 狀態二：輸入了亂碼或非地名 (錯誤)
                 weatherData.value.error = true; 
             }
         }
@@ -196,8 +203,6 @@ const validateWeather = async () => {
 }
 
 watch(() => setup.value.currency, () => fetchExchangeRate());
-
-// 只監聽「當日地點」的變化，不再監聽標題
 let debounceTimer = null;
 watch(() => currentDay.value.location, () => {
     if(debounceTimer) clearTimeout(debounceTimer);
@@ -207,8 +212,31 @@ watch(currentDayIdx, () => setTimeout(() => validateWeather(), 200));
 
 const addParticipant = () => { if (newParticipantName.value && !participants.value.includes(newParticipantName.value)) { participants.value.push(newParticipantName.value); newParticipantName.value = ''; }}
 const removeParticipant = (name) => { if (confirm('確定移除?')) participants.value = participants.value.filter(p => p !== name); }
-const addItem = () => currentDay.value.items.push({ time: '', type: 'spot', activity: '', location: '' })
-const removeItem = (idx) => currentDay.value.items.splice(idx, 1)
+
+const sortItems = () => {
+    // 當時間變更時，觸發排序 (這會覆蓋手動拖拉的順序)
+    if (days.value[currentDayIdx.value] && days.value[currentDayIdx.value].items) {
+        days.value[currentDayIdx.value].items.sort((a, b) => {
+            if (!a.time) return 1;
+            if (!b.time) return -1;
+            return a.time.localeCompare(b.time);
+        });
+    }
+}
+
+const addItem = () => {
+    // 新增時不排序，直接加在最後，使用者可自行拖拉
+    days.value[currentDayIdx.value].items.push({ 
+        id: Date.now() + Math.random(),
+        time: '', 
+        type: 'spot', 
+        activity: '', 
+        location: '',
+        note: '' 
+    });
+}
+
+const removeItem = (idx) => days.value[currentDayIdx.value].items.splice(idx, 1)
 const addDay = () => days.value.push({ date: `Day ${days.value.length+1}`, items: [], location: '' })
 const addExpense = () => { if(newExpense.value.item && newExpense.value.amount) { expenses.value.unshift({...newExpense.value}); newExpense.value.item=''; newExpense.value.amount=''; }}
 const removeExpense = (idx) => expenses.value.splice(idx, 1)
@@ -229,11 +257,20 @@ const parseAndImport = () => {
             if (fullText.match(/餐|吃|飯|食|cafe/)) type = 'food';
             else if (fullText.match(/逛|買|店|shop/)) type = 'shop';
             else if (fullText.match(/車|機|站|前往/)) type = 'transport';
-            newItems.push({ time, type, activity: activity || location, location });
+            
+            newItems.push({ 
+                id: Date.now() + Math.random(),
+                time, 
+                type, 
+                activity: activity || location, 
+                location,
+                note: ''
+            });
         }
     });
     if (newItems.length > 0) {
-        currentDay.value.items.push(...newItems);
+        days.value[currentDayIdx.value].items.push(...newItems);
+        sortItems(); // 匯入時自動排一下
         showImportModal.value = false;
         importText.value = '';
     }
@@ -263,9 +300,7 @@ const initMap = async () => {
 }
 const centerOnUser = () => { if(userLocation.value && mapInstance) mapInstance.flyTo(userLocation.value, 15); }
 
-// ✨ 優化版：真實搜尋附近美食
 const searchNearby = async (item, idx) => { 
-    // 1. 決定搜尋中心點 (優先順序：該行程地點 > 當日城市 > 全域目的地)
     let targetLoc = item.location;
     if (!targetLoc) targetLoc = currentDay.value.location;
     if (!targetLoc) targetLoc = setup.value.destination;
@@ -276,31 +311,28 @@ const searchNearby = async (item, idx) => {
     }
 
     isSearchingRecs.value = true; 
-    searchTargetIndex.value = `${currentDayIdx.value}-${idx}`; // 開啟 Loading 動畫
+    searchTargetIndex.value = `${currentDayIdx.value}-${idx}`; 
 
     try {
-        // 2. 使用 Nominatim API 搜尋 "restaurants near [地點]"
         const query = `restaurants near ${targetLoc}`;
         const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1`);
         const data = await res.json();
 
         if (data && data.length > 0) {
-            // 3. 格式化搜尋結果
             recommendationsMap[`${currentDayIdx.value}-${idx}`] = data.map(place => ({
-                name: place.name || place.display_name.split(',')[0], // 嘗試只取店名
+                name: place.name || place.display_name.split(',')[0], 
                 lat: parseFloat(place.lat),
                 lon: parseFloat(place.lon)
             }));
         } else {
             recommendationsMap[`${currentDayIdx.value}-${idx}`] = [];
-            alert(`在「${targetLoc}」附近找不到餐廳，請嘗試輸入更明確的地點名稱 (例如：台北車站)。`);
+            alert(`在「${targetLoc}」附近找不到餐廳。`);
         }
     } catch (e) {
-        console.error("搜尋美食失敗", e);
-        alert("搜尋服務暫時無法使用，請稍後再試。");
+        alert("搜尋服務暫時無法使用。");
     } finally {
         isSearchingRecs.value = false; 
-        searchTargetIndex.value = ''; // 關閉 Loading
+        searchTargetIndex.value = ''; 
     }
 }
 const applyRecommendation = (item, rec) => { item.activity = rec.name; item.location = rec.name; item.lat=rec.lat; item.lon=rec.lon; }
@@ -308,6 +340,8 @@ const applyRecommendation = (item, rec) => { item.activity = rec.name; item.loca
 watch(viewMode, (v) => { if(v === 'map') initMap(); })
 watch(currentDayIdx, () => { if(viewMode.value === 'map') initMap(); })
 
+// ✨ 自動存檔監聽器
+// 因為 v-model 改成了 days[idx].items，這個 deep watch 就能正確抓到變化了
 let saveTimeout = null;
 watch([days, expenses, setup, participants], () => {
     if(saveTimeout) clearTimeout(saveTimeout);
@@ -320,14 +354,25 @@ watch([days, expenses, setup, participants], () => {
                 participants: participants.value 
             });
         }
-    }, 1000);
+    }, 1000); // 延遲1秒存檔，避免頻繁寫入
 }, { deep: true })
 
 onMounted(() => {
     unsubscribe = onSnapshot(doc(db, "trip_details", props.tripId), (docSnap) => {
         if (docSnap.exists()) {
             const data = docSnap.data();
-            days.value = data.days || [];
+            const loadedDays = data.days || [];
+            
+            loadedDays.forEach(day => {
+                if(day.items) {
+                    day.items.forEach(item => {
+                        if(!item.id) item.id = Date.now() + Math.random();
+                        if(!item.note) item.note = ''; 
+                    });
+                }
+            });
+            
+            days.value = loadedDays;
             expenses.value = data.expenses || [];
             setup.value = data.setup || setup.value;
             participants.value = data.participants || ['我', '旅伴A'];
@@ -389,65 +434,83 @@ onUnmounted(() => { if(unsubscribe) unsubscribe(); })
                                     <input v-model="currentDay.location" class="text-xs font-bold text-primary bg-slate-50 px-2 py-1 rounded-lg border-none focus:ring-1 focus:ring-primary w-32" placeholder="此處輸入城市 (如: 大阪)">
                                 </div>
                             </div>
-                            
                             <div class="flex flex-col items-end gap-2">
                                 <button @click="showImportModal = true" class="flex flex-col items-center text-primary hover:text-primary-dark transition"><i class="ph-duotone ph-file-text text-2xl"></i><span class="text-[10px] font-bold">匯入</span></button>
-                                
-                                <div v-if="!currentDay.location" class="flex items-center gap-2 text-slate-400 font-bold text-sm bg-slate-100 px-2 py-1 rounded-lg mt-1 whitespace-nowrap">
-                                    <i class="ph-bold ph-map-pin-line"></i><span>沒有輸入城市</span>
-                                </div>
-                                <div v-else-if="weatherData.error" class="flex items-center gap-2 text-red-500 font-bold text-sm bg-red-50 px-2 py-1 rounded-lg mt-1 whitespace-nowrap">
-                                    <i class="ph-bold ph-warning-circle"></i><span>未輸入正確地點</span>
-                                </div>
-                                <div v-else-if="weatherDisplay" class="flex items-center gap-2 text-primary font-bold text-sm bg-primary/5 px-2 py-1 rounded-lg mt-1 whitespace-nowrap">
-                                    <i :class="['ph-duotone', weatherDisplay.icon]"></i><span>{{ weatherDisplay.temp }} {{ weatherDisplay.label }}</span>
-                                </div>
+                                <div v-if="!currentDay.location" class="flex items-center gap-2 text-slate-400 font-bold text-sm bg-slate-100 px-2 py-1 rounded-lg mt-1 whitespace-nowrap"><i class="ph-bold ph-map-pin-line"></i><span>沒有輸入城市</span></div>
+                                <div v-else-if="weatherData.error" class="flex items-center gap-2 text-red-500 font-bold text-sm bg-red-50 px-2 py-1 rounded-lg mt-1 whitespace-nowrap"><i class="ph-bold ph-warning-circle"></i><span>未輸入正確地點</span></div>
+                                <div v-else-if="weatherDisplay" class="flex items-center gap-2 text-primary font-bold text-sm bg-primary/5 px-2 py-1 rounded-lg mt-1 whitespace-nowrap"><i :class="['ph-duotone', weatherDisplay.icon]"></i><span>{{ weatherDisplay.temp }} {{ weatherDisplay.label }}</span></div>
                             </div>
                         </div>
                     </div>
 
                     <div class="relative pl-5 border-l-[3px] border-primary/20 space-y-6">
-                        <div v-for="(item, idx) in currentDay.items" :key="idx" class="relative group">
-                            <div class="absolute -left-[25px] top-5 w-4 h-4 rounded-full border-[3px] border-white shadow-sm ring-1 ring-slate-200 z-10" :class="getDotColor(item.type)"></div>
-                            <div class="bg-white p-4 rounded-[20px] shadow-premium-sm border border-slate-100/80 transition-all hover:shadow-premium relative overflow-hidden">
-                                <div class="flex gap-3 relative z-10">
-                                    <div class="flex flex-col gap-2 w-[76px] shrink-0">
-                                        <div class="relative bg-slate-50 rounded-2xl border border-slate-100 h-16 flex flex-col items-center justify-center overflow-hidden">
-                                            <input v-model="item.time" type="time" class="absolute inset-0 opacity-0 z-10 w-full h-full cursor-pointer">
-                                            <span class="text-[10px] text-slate-400 font-bold tracking-wider">{{ getTimePeriod(item.time) }}</span>
-                                            <span class="text-xl font-black text-dark font-mono leading-none mt-0.5">{{ item.time || '--:--' }}</span>
+                        <draggable 
+                            v-if="days[currentDayIdx]"
+                            v-model="days[currentDayIdx].items" 
+                            item-key="id" 
+                            handle=".drag-handle"
+                            animation="200"
+                            class="space-y-6"
+                        >
+                            <template #item="{ element, index }">
+                                <div class="relative group">
+                                    <div class="absolute -left-[25px] top-5 w-4 h-4 rounded-full border-[3px] border-white shadow-sm ring-1 ring-slate-200 z-10" :class="getDotColor(element.type)"></div>
+                                    <div class="bg-white p-4 rounded-[20px] shadow-premium-sm border border-slate-100/80 transition-all hover:shadow-premium relative overflow-hidden">
+                                        <div class="drag-handle absolute right-2 top-2 text-slate-300 cursor-move p-2 hover:text-primary z-20">
+                                            <i class="ph-bold ph-dots-six-vertical text-xl"></i>
                                         </div>
-                                        <select v-model="item.type" class="text-[11px] font-medium bg-white border border-slate-200 rounded-xl py-1.5 w-full text-center focus:ring-1 focus:ring-primary/50">
-                                            <option value="spot">📍 景點</option><option value="food">🍴 美食</option><option value="shop">🛍️ 購物</option><option value="transport">🚇 交通</option>
-                                        </select>
-                                    </div>
-                                    <div class="flex-1 min-w-0 flex flex-col justify-center py-1">
-                                        <input v-model="item.activity" class="text-lg font-black text-dark bg-transparent placeholder-slate-300 w-full mb-1 focus:outline-none" placeholder="行程名稱">
-                                        <div class="flex items-center gap-1.5 mb-2">
-                                            <i class="ph-fill ph-map-pin text-primary text-sm"></i>
-                                            <input v-model="item.location" @blur="fetchCoordsForItem(item)" class="text-sm font-medium text-slate-500 bg-transparent w-full focus:outline-none truncate placeholder-slate-300" placeholder="地點">
-                                            <i v-if="item.lat" class="ph-bold ph-check-circle text-primary text-sm"></i>
+
+                                        <div class="flex gap-3 relative z-10">
+                                            <div class="flex flex-col gap-2 w-[76px] shrink-0">
+                                                <div class="relative bg-slate-50 rounded-2xl border border-slate-100 h-16 flex flex-col items-center justify-center overflow-hidden">
+                                                    <input v-model="element.time" @change="sortItems" type="time" class="absolute inset-0 opacity-0 z-10 w-full h-full cursor-pointer">
+                                                    <span class="text-[10px] text-slate-400 font-bold tracking-wider">{{ getTimePeriod(element.time) }}</span>
+                                                    <span class="text-xl font-black text-dark font-mono leading-none mt-0.5">{{ element.time || '--:--' }}</span>
+                                                </div>
+                                                <select v-model="element.type" class="text-[11px] font-medium bg-white border border-slate-200 rounded-xl py-1.5 w-full text-center focus:ring-1 focus:ring-primary/50">
+                                                    <option value="spot">📍 景點</option><option value="food">🍴 美食</option><option value="shop">🛍️ 購物</option><option value="transport">🚇 交通</option>
+                                                </select>
+                                            </div>
+                                            <div class="flex-1 min-w-0 flex flex-col justify-center py-1 pr-6">
+                                                <input v-model="element.activity" class="text-lg font-black text-dark bg-transparent placeholder-slate-300 w-full mb-1 focus:outline-none" placeholder="行程名稱">
+                                                <div class="flex items-center gap-1.5 mb-2">
+                                                    <i class="ph-fill ph-map-pin text-primary text-sm"></i>
+                                                    <input v-model="element.location" @blur="fetchCoordsForItem(element)" class="text-sm font-medium text-slate-500 bg-transparent w-full focus:outline-none truncate placeholder-slate-300" placeholder="地點">
+                                                    <i v-if="element.lat" class="ph-bold ph-check-circle text-primary text-sm"></i>
+                                                </div>
+                                                
+                                                <div class="flex items-center gap-1.5 mt-1.5">
+                                                    <i class="ph-bold ph-notebook text-slate-300 text-sm"></i>
+                                                    <input 
+                                                        v-model="element.note" 
+                                                        class="text-xs font-medium text-slate-500 bg-transparent w-full focus:outline-none placeholder-slate-200" 
+                                                        placeholder="備註 (例: 訂位號 1234)"
+                                                    >
+                                                </div>
+
+                                                <div class="flex items-center gap-2 mt-2">
+                                                    <a v-if="element.location" :href="`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(element.location)}`" target="_blank" class="text-[11px] font-bold bg-primary/10 text-primary-dark px-2.5 py-1 rounded-full flex items-center gap-1 hover:bg-primary/20 transition"><i class="ph-bold ph-navigation-arrow"></i> 導航</a>
+                                                    <button @click="removeItem(index)" class="ml-auto text-slate-300 hover:text-accent p-1.5 transition"><i class="ph-bold ph-trash text-lg"></i></button>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div class="flex items-center gap-2">
-                                            <a v-if="item.location" :href="`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location)}`" target="_blank" class="text-[11px] font-bold bg-primary/10 text-primary-dark px-2.5 py-1 rounded-full flex items-center gap-1 hover:bg-primary/20 transition"><i class="ph-bold ph-navigation-arrow"></i> 導航</a>
-                                            <button @click="removeItem(idx)" class="ml-auto text-slate-300 hover:text-accent p-1.5 transition"><i class="ph-bold ph-trash text-lg"></i></button>
+                                        <div v-if="element.type === 'food'" class="mt-3 pt-3 border-t border-dashed border-slate-100 relative z-10">
+                                            <button @click="searchNearby(element, index)" class="w-full text-xs text-primary bg-primary/10 py-2 rounded-xl font-bold flex items-center justify-center gap-1.5 active:bg-primary/20 transition">
+                                                <i v-if="isSearchingRecs && searchTargetIndex === `${currentDayIdx}-${index}`" class="ph-bold ph-spinner animate-spin"></i>
+                                                <i v-else class="ph-bold ph-fork-knife"></i> 搜尋附近美食
+                                            </button>
+                                            <div v-if="recommendationsMap[`${currentDayIdx}-${index}`]" class="flex gap-2 overflow-x-auto hide-scroll mt-3 pb-1">
+                                                <div v-for="rec in recommendationsMap[`${currentDayIdx}-${index}`]" @click="applyRecommendation(element, rec)" class="shrink-0 w-32 p-2.5 bg-white border border-primary/30 rounded-xl shadow-sm flex flex-col gap-1 cursor-pointer hover:border-primary transition active:scale-95 relative overflow-hidden">
+                                                    <div class="absolute inset-0 bg-primary/5 pointer-events-none"></div>
+                                                    <span class="text-xs font-bold text-dark truncate">{{ rec.name }}</span><span class="text-[10px] text-primary opacity-80">推薦</span>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                                <div v-if="item.type === 'food'" class="mt-3 pt-3 border-t border-dashed border-slate-100 relative z-10">
-                                    <button @click="searchNearby(item, idx)" class="w-full text-xs text-primary bg-primary/10 py-2 rounded-xl font-bold flex items-center justify-center gap-1.5 active:bg-primary/20 transition">
-                                        <i v-if="isSearchingRecs && searchTargetIndex === `${currentDayIdx}-${idx}`" class="ph-bold ph-spinner animate-spin"></i>
-                                        <i v-else class="ph-bold ph-fork-knife"></i> 搜尋附近美食
-                                    </button>
-                                    <div v-if="recommendationsMap[`${currentDayIdx}-${idx}`]" class="flex gap-2 overflow-x-auto hide-scroll mt-3 pb-1">
-                                        <div v-for="rec in recommendationsMap[`${currentDayIdx}-${idx}`]" @click="applyRecommendation(item, rec)" class="shrink-0 w-32 p-2.5 bg-white border border-primary/30 rounded-xl shadow-sm flex flex-col gap-1 cursor-pointer hover:border-primary transition active:scale-95 relative overflow-hidden">
-                                            <div class="absolute inset-0 bg-primary/5 pointer-events-none"></div>
-                                            <span class="text-xs font-bold text-dark truncate">{{ rec.name }}</span><span class="text-[10px] text-primary opacity-80">推薦</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                            </template>
+                        </draggable>
+
                         <button @click="addItem" class="group flex items-center gap-3 text-primary font-bold text-sm px-2 py-3 w-full rounded-2xl border-2 border-dashed border-primary/30 hover:bg-primary/5 hover:border-primary transition active:scale-[0.98]">
                             <div class="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center group-hover:bg-primary group-hover:text-white transition"><i class="ph-bold ph-plus"></i></div> 新增行程
                         </button>
