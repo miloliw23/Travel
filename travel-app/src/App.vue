@@ -12,6 +12,10 @@ import {
 import { collection, doc, setDoc, onSnapshot, query, orderBy, deleteDoc, where, updateDoc, arrayUnion, getDoc } from 'firebase/firestore'
 import TripMain from './components/TripMain.vue'
 import draggable from 'vuedraggable'
+import { 
+    collection, doc, setDoc, onSnapshot, query, orderBy, deleteDoc, 
+    where, updateDoc, arrayUnion, getDoc, writeBatch // 👈 加入這個
+} from 'firebase/firestore'
 
 // --- 狀態定義 ---
 const user = ref(null)
@@ -94,7 +98,8 @@ const initTrip = async () => {
         daysCount: setup.value.days, 
         createdAt: Date.now(),
         members: [user.value.uid], 
-        ownerName: user.value.displayName || user.value.email.split('@')[0] // 若無名字則用 email 前綴
+        ownerName: user.value.displayName || user.value.email.split('@')[0],// 若無名字則用 email 前綴
+        order: 0
     });
     
     await setDoc(doc(db, "trip_details", newId), { 
@@ -146,6 +151,27 @@ const switchTrip = (id) => {
     showTripMenu.value = false;
 }
 
+// ✨ 新增：處理側邊欄拖拉排序
+const updateTripOrder = async () => {
+    // 1. 建立一個批次寫入 (Batch)，因為我們要一次更新好幾個行程的順序
+    const batch = writeBatch(db);
+    
+    // 2. 遍歷目前的列表，把新的索引 (index) 寫入 order 欄位
+    tripList.value.forEach((trip, index) => {
+        const tripRef = doc(db, "trips", trip.id);
+        // 只更新 order 欄位
+        batch.update(tripRef, { order: index });
+    });
+
+    try {
+        // 3. 送出更新
+        await batch.commit();
+        console.log("順序更新成功");
+    } catch (e) {
+        console.error("順序更新失敗", e);
+    }
+}
+
 const deleteTrip = async (id) => {
     if(!confirm('確定刪除? 注意：這會刪除所有人的資料！')) return;
     await deleteDoc(doc(db, "trips", id));
@@ -157,14 +183,37 @@ onMounted(() => {
     onAuthStateChanged(auth, (currentUser) => {
         user.value = currentUser;
         if (currentUser) {
+            // ✨ 修改 Query：移除 orderBy，我們改在前端排
             const q = query(
                 collection(db, "trips"), 
-                where("members", "array-contains", currentUser.uid),
-                orderBy("createdAt", "desc")
+                where("members", "array-contains", currentUser.uid)
+                // orderBy("createdAt", "desc") 👈 這行拿掉，因為我們要自訂排序
             );
             
             onSnapshot(q, (snapshot) => {
-                tripList.value = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                const rawList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                
+                // ✨ 關鍵邏輯：前端混合排序
+                // 如果有 'order' 欄位就用 order 排 (小到大)
+                // 如果沒有 'order' (舊資料)，就用 'createdAt' 排 (新到舊)
+                rawList.sort((a, b) => {
+                    // 兩者都有 order，直接比大小
+                    if (a.order !== undefined && b.order !== undefined) {
+                        if (a.order === b.order) {
+                            return b.createdAt - a.createdAt;
+                        }
+                        return a.order - b.order;
+                    }
+                    // 其中一個有 order，有 order 的排前面 (或後面，看您喜好)
+                    if (a.order !== undefined) return -1;
+                    if (b.order !== undefined) return 1;
+                    
+                    // 都沒有 order (舊資料)，用建立時間排
+                    return b.createdAt - a.createdAt;
+                });
+
+                tripList.value = rawList;
+
                 if (tripList.value.length > 0 && !currentTripId.value) {
                     currentTripId.value = tripList.value[0].id;
                 }
@@ -268,7 +317,7 @@ onMounted(() => {
                     </div>
                     
                     <div class="flex-1 overflow-y-auto space-y-3 hide-scroll">
-                        <draggable v-model="tripList" item-key="id" class="space-y-3">
+                        <draggable v-model="tripList" item-key="id" class="space-y-3" @end="updateTripOrder">
                             <template #item="{ element }">
                                 <div @click="switchTrip(element.id)" class="p-4 rounded-2xl border-2 transition cursor-pointer relative group" :class="currentTripId === element.id ? 'bg-primary/5 border-primary shadow-sm' : 'bg-slate-50 border-transparent hover:bg-slate-100'">
                                     <div class="flex justify-between items-start">
