@@ -48,7 +48,21 @@ const currencyOptions = [
 
 // --- Computed ---
 const currentDay = computed(() => days.value[currentDayIdx.value] || { items: [], location: '' })
+
 const totalExpense = computed(() => expenses.value.reduce((sum, item) => sum + item.amount, 0))
+
+// ✨ 這裡加入這段 computed，讓拖拉時能正確觸發存檔
+const currentDayItems = computed({
+    get() {
+        return days.value[currentDayIdx.value]?.items || [];
+    },
+    set(value) {
+        if(days.value[currentDayIdx.value]) {
+            days.value[currentDayIdx.value].items = value;
+        }
+    }
+})
+
 const currencySymbol = computed(() => {
   const map = { 'TWD': 'NT$', 'JPY': '¥', 'CNY': '¥', 'USD': '$', 'EUR': '€', 'KRW': '₩', 'GBP': '£', 'HKD': 'HK$', 'THB': '฿', 'VND': '₫' }
   return map[setup.value.currency] || '$'
@@ -214,7 +228,7 @@ const addParticipant = () => { if (newParticipantName.value && !participants.val
 const removeParticipant = (name) => { if (confirm('確定移除?')) participants.value = participants.value.filter(p => p !== name); }
 
 const sortItems = () => {
-    // 當時間變更時，觸發排序 (這會覆蓋手動拖拉的順序)
+    // 當時間變更完畢後，才觸發排序
     if (days.value[currentDayIdx.value] && days.value[currentDayIdx.value].items) {
         days.value[currentDayIdx.value].items.sort((a, b) => {
             if (!a.time) return 1;
@@ -225,7 +239,6 @@ const sortItems = () => {
 }
 
 const addItem = () => {
-    // 新增時不排序，直接加在最後，使用者可自行拖拉
     days.value[currentDayIdx.value].items.push({ 
         id: Date.now() + Math.random(),
         time: '', 
@@ -270,7 +283,7 @@ const parseAndImport = () => {
     });
     if (newItems.length > 0) {
         days.value[currentDayIdx.value].items.push(...newItems);
-        sortItems(); // 匯入時自動排一下
+        sortItems();
         showImportModal.value = false;
         importText.value = '';
     }
@@ -340,8 +353,6 @@ const applyRecommendation = (item, rec) => { item.activity = rec.name; item.loca
 watch(viewMode, (v) => { if(v === 'map') initMap(); })
 watch(currentDayIdx, () => { if(viewMode.value === 'map') initMap(); })
 
-// ✨ 自動存檔監聽器
-// 因為 v-model 改成了 days[idx].items，這個 deep watch 就能正確抓到變化了
 let saveTimeout = null;
 watch([days, expenses, setup, participants], () => {
     if(saveTimeout) clearTimeout(saveTimeout);
@@ -354,7 +365,7 @@ watch([days, expenses, setup, participants], () => {
                 participants: participants.value 
             });
         }
-    }, 1000); // 延遲1秒存檔，避免頻繁寫入
+    }, 1000); 
 }, { deep: true })
 
 onMounted(() => {
@@ -446,7 +457,7 @@ onUnmounted(() => { if(unsubscribe) unsubscribe(); })
                     <div class="relative pl-5 border-l-[3px] border-primary/20 space-y-6">
                         <draggable 
                             v-if="days[currentDayIdx]"
-                            v-model="days[currentDayIdx].items" 
+                            v-model="currentDayItems" 
                             item-key="id" 
                             handle=".drag-handle"
                             animation="200"
@@ -463,7 +474,7 @@ onUnmounted(() => { if(unsubscribe) unsubscribe(); })
                                         <div class="flex gap-3 relative z-10">
                                             <div class="flex flex-col gap-2 w-[76px] shrink-0">
                                                 <div class="relative bg-slate-50 rounded-2xl border border-slate-100 h-16 flex flex-col items-center justify-center overflow-hidden">
-                                                    <input v-model="element.time" @change="sortItems" type="time" class="absolute inset-0 opacity-0 z-10 w-full h-full cursor-pointer">
+                                                    <input v-model="element.time" @blur="sortItems" type="time" class="absolute inset-0 opacity-0 z-10 w-full h-full cursor-pointer">
                                                     <span class="text-[10px] text-slate-400 font-bold tracking-wider">{{ getTimePeriod(element.time) }}</span>
                                                     <span class="text-xl font-black text-dark font-mono leading-none mt-0.5">{{ element.time || '--:--' }}</span>
                                                 </div>
