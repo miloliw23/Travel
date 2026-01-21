@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, onUnmounted } from 'vue'
 import { db } from '../firebase'
-import { doc, onSnapshot, updateDoc, deleteDoc } from 'firebase/firestore'
+import { doc, onSnapshot, updateDoc } from 'firebase/firestore'
 import TripPlan from './TripPlan.vue'
 import TripMoney from './TripMoney.vue'
 
@@ -10,166 +10,119 @@ const emit = defineEmits(['openMenu'])
 
 const activeTab = ref('plan')
 const details = ref(null)
-const weather = ref({ temp: '', desc: '', error: false })
-const isWeatherLoading = ref(false)
+const isHeaderShrunk = ref(false) 
 let unsubscribe = null
 
-// ✨ 核心功能：複製行程代碼 (邀請碼)
-const copyInviteCode = () => {
-  if (!props.tripId) return
-  navigator.clipboard.writeText(props.tripId)
-  alert("行程代碼已複製！將此代碼傳給朋友，他們就能加入協作。")
-}
-
-// ✨ 天氣獲取邏輯 (wttr.in)
-const fetchWeather = async (city) => {
-  if (!city) {
-    weather.value = { temp: '', desc: '', error: false }
-    return
-  }
-  isWeatherLoading.value = true
-  weather.value.error = false
-  
+// --- ✨ 優化 1: 標題同步更新 (同時寫入 trips 集合以更新側邊欄) ---
+const updateDestination = async (newVal) => {
+  if (!props.tripId || !newVal?.trim()) return
   try {
-    const res = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1`)
-    if (!res.ok) throw new Error("Network error")
-    
-    const data = await res.json()
-    if (data.current_condition && data.current_condition.length > 0) {
-      const cond = data.current_condition[0]
-      weather.value = {
-        temp: cond.temp_C + '°C',
-        desc: cond.lang_zh ? cond.lang_zh[0].value : cond.weatherDesc[0].value,
-        error: false
-      }
-    } else {
-      throw new Error("Location not found")
-    }
-  } catch (e) {
-    weather.value = { temp: '', desc: '地點錯誤', error: true }
-  } finally {
-    isWeatherLoading.value = false
-  }
+    // 1. 更新詳細資料 (內頁)
+    await updateDoc(doc(db, "trip_details", props.tripId), {
+      "setup.destination": newVal.trim()
+    })
+    // 2. 更新列表資料 (側邊欄)
+    await updateDoc(doc(db, "trips", props.tripId), {
+      destination: newVal.trim()
+    })
+  } catch (e) { console.error("更新標題失敗:", e) }
 }
 
-// 監聽 Firebase 數據同步
 watch(() => props.tripId, (newId) => {
   if (unsubscribe) unsubscribe();
+  details.value = null;
+  
   if (newId) {
     unsubscribe = onSnapshot(doc(db, "trip_details", newId), (snap) => {
       if (snap.exists()) {
-        details.value = snap.data();
-        if (details.value.setup?.location) {
-          fetchWeather(details.value.setup.location)
-        }
+        const data = snap.data()
+        if (!data.days) data.days = []
+        details.value = data
       }
     });
   }
 }, { immediate: true });
 
-// 更新地點並儲存
-const updateLocation = async () => {
-  if (!details.value.setup.location) return
-  try {
-    await updateDoc(doc(db, "trip_details", props.tripId), {
-      "setup.location": details.value.setup.location
-    })
-    fetchWeather(details.value.setup.location)
-  } catch (e) {
-    console.error("儲存失敗", e)
-  }
-}
-
-// 刪除行程
-const handleDelete = async () => {
-  if(confirm('確定要刪除這份行程嗎？')) {
-    await deleteDoc(doc(db, "trips", props.tripId));
-    await deleteDoc(doc(db, "trip_details", props.tripId));
-    window.location.reload();
-  }
-}
-
 onUnmounted(() => { if (unsubscribe) unsubscribe(); });
 </script>
 
 <template>
-  <div v-if="details" class="h-full flex flex-col bg-[#FDFBF7]">
-    <header class="bg-[#F2EDE4] px-6 pt-6 pb-4 shrink-0 border-b border-[#E9E2D7]">
-      <div class="flex justify-between items-center mb-5">
-        <button @click="emit('openMenu')" class="bg-white p-2.5 rounded-2xl shadow-sm border border-[#E9E2D7] text-[#E6B3A3] active:scale-90 transition">
-          <i class="ph-bold ph-list text-xl"></i>
+  <div class="h-full flex flex-col bg-[#FDFBF7] overflow-hidden">
+    
+    <header 
+      v-if="details"
+      class="bg-[#F2EDE4] px-4 border-b border-[#E9E2D7] transition-all duration-500 ease-in-out shrink-0 z-40"
+      :class="isHeaderShrunk ? 'py-2 shadow-md' : 'py-4'"
+    >
+      <div class="flex items-center justify-between gap-3 max-w-5xl mx-auto w-full">
+        <button @click="emit('openMenu')" 
+          class="bg-white rounded-xl border border-[#E9E2D7] text-[#E6B3A3] shrink-0 transition-all duration-500 flex items-center justify-center shadow-sm active:scale-95"
+          :class="isHeaderShrunk ? 'w-9 h-9' : 'w-10 h-10'">
+          <i class="ph-bold ph-list" :class="isHeaderShrunk ? 'text-lg' : 'text-xl'"></i>
         </button>
         
-        <div class="flex bg-white/50 rounded-2xl p-1 border border-[#E9E2D7] backdrop-blur-md">
+        <div class="flex-1 min-w-0">
+          <input 
+            v-model="details.setup.destination"
+            @blur="updateDestination($event.target.value)"
+            @keyup.enter="$event.target.blur()"
+            class="w-full font-black text-[#8B7E74] bg-transparent outline-none transition-all duration-500 tracking-tight placeholder-[#D1C7BD]"
+            :class="isHeaderShrunk ? 'text-base' : 'text-xl'"
+            placeholder="點此輸入行程名稱..."
+          />
+        </div>
+
+        <div class="flex bg-white/60 rounded-xl p-1 border border-[#E9E2D7] shrink-0 transition-all duration-500 origin-right"
+             :class="isHeaderShrunk ? 'scale-95' : 'scale-100'">
           <button @click="activeTab = 'plan'" 
-            :class="activeTab === 'plan' ? 'bg-[#E6B3A3] text-white shadow-sm' : 'text-[#BAB3A9]'" 
-            class="p-2.5 rounded-xl transition-all">
+            class="px-3 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1"
+            :class="activeTab === 'plan' ? 'bg-[#E6B3A3] text-white shadow-sm' : 'text-[#BAB3A9] hover:bg-white/50'">
             <i class="ph-fill ph-calendar-blank text-lg"></i>
           </button>
           <button @click="activeTab = 'money'" 
-            :class="activeTab === 'money' ? 'bg-[#E6B3A3] text-white shadow-sm' : 'text-[#BAB3A9]'" 
-            class="p-2.5 rounded-xl transition-all ml-1">
+            class="px-3 py-1.5 rounded-lg ml-1 transition-all flex items-center justify-center gap-1"
+            :class="activeTab === 'money' ? 'bg-[#E6B3A3] text-white shadow-sm' : 'text-[#BAB3A9] hover:bg-white/50'">
             <i class="ph-fill ph-currency-dollar text-lg"></i>
-          </button>
-        </div>
-        
-        <div class="w-10"></div>
-      </div>
-
-      <div class="text-center space-y-3 px-4">
-        <h1 class="text-2xl font-black text-[#8B7E74] tracking-tight truncate">
-          {{ details.setup.destination }}
-        </h1>
-        
-        <div class="flex items-center justify-center gap-2">
-          <div class="flex items-center bg-white/60 px-3 py-1.5 rounded-full border border-[#E9E2D7] shadow-inner">
-            <i class="ph-fill ph-map-pin text-[#E6B3A3] text-xs shrink-0"></i>
-            <input 
-              v-model="details.setup.location" 
-              @blur="updateLocation" 
-              placeholder="城市" 
-              class="bg-transparent text-[11px] font-bold text-[#8B7E74] outline-none ml-1 w-20 placeholder:opacity-40"
-            >
-          </div>
-          
-          <div v-if="weather.temp || weather.error" 
-               class="flex items-center gap-1.5 bg-white/80 px-3 py-1.5 rounded-full border shadow-sm shrink-0 animate-fade-in"
-               :class="weather.error ? 'border-red-100 bg-red-50/20' : 'border-[#F2EDE4]'">
-            <span v-if="!weather.error" class="text-xs font-black text-[#E6B3A3]">{{ weather.temp }}</span>
-            <span class="text-[10px] font-bold" :class="weather.error ? 'text-red-400' : 'text-[#BAB3A9]'">{{ weather.desc }}</span>
-          </div>
-          <div v-else-if="isWeatherLoading" class="text-[10px] font-bold text-[#BAB3A9] animate-pulse shrink-0">
-            查詢中...
-          </div>
-
-          <button @click="copyInviteCode" class="w-8 h-8 bg-white border border-[#E9E2D7] rounded-full flex items-center justify-center text-[#BAB3A9] hover:text-[#E6B3A3] transition shadow-sm active:scale-90">
-            <i class="ph-bold ph-share-network"></i>
           </button>
         </div>
       </div>
     </header>
 
     <main class="flex-1 overflow-hidden relative">
-      <TripPlan v-if="activeTab === 'plan'" :details="details" :tripId="tripId" />
-      <TripMoney v-if="activeTab === 'money'" :details="details" :tripId="tripId" />
-      
-      <button @click="handleDelete" class="absolute bottom-6 right-6 w-12 h-12 bg-white/90 text-[#D98C8C] rounded-full shadow-lg flex items-center justify-center border border-[#F2EDE4] z-50 active:scale-90 transition">
-        <i class="ph-bold ph-trash text-xl"></i>
-      </button>
+      <transition name="fade">
+        
+        <div v-if="details && details.days" class="h-full absolute inset-0 w-full" key="content">
+          <TripPlan 
+            v-if="activeTab === 'plan'" 
+            :key="tripId + '-plan'"
+            :details="details" 
+            :tripId="tripId" 
+            @shrink="val => isHeaderShrunk = val" 
+          />
+          <TripMoney 
+            v-else-if="activeTab === 'money'" 
+            :key="tripId + '-money'"
+            :details="details" 
+            :tripId="tripId" 
+          />
+        </div>
+
+        <div v-else class="h-full flex flex-col items-center justify-center gap-3 bg-[#FDFBF7] absolute inset-0 w-full" key="loading">
+          <i class="ph-bold ph-circle-notch animate-spin text-3xl text-[#E6B3A3]"></i>
+          <span class="text-[10px] font-bold text-[#BAB3A9] tracking-widest uppercase">載入中...</span>
+        </div>
+      </transition>
     </main>
   </div>
 </template>
 
 <style scoped>
-.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.animate-fade-in { animation: fadeIn 0.4s ease-out; }
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(-5px); }
-  to { opacity: 1; transform: translateY(0); }
+/* ✨ 修改動畫樣式，讓重疊切換更自然 */
+.fade-enter-active, .fade-leave-active { 
+  transition: opacity 0.3s ease; 
 }
-
-/* 確保行動端滾動順暢 */
-main {
-  -webkit-overflow-scrolling: touch;
+.fade-enter-from, .fade-leave-to { 
+  opacity: 0; 
 }
+.h-full { height: 100dvh; }
 </style>
