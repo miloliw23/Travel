@@ -1,7 +1,7 @@
 <script setup>
+// src/App.vue
 import { ref, onMounted } from 'vue'
 import { db, auth } from './firebase' 
-// ✨ 引入 Email 相關的驗證函式
 import { 
     signInWithEmailAndPassword, 
     createUserWithEmailAndPassword, 
@@ -9,13 +9,25 @@ import {
     onAuthStateChanged,
     updateProfile 
 } from "firebase/auth";
-import { collection, doc, setDoc, onSnapshot, query, orderBy, deleteDoc, where, updateDoc, arrayUnion, getDoc } from 'firebase/firestore'
+
+// ✨ 確保這整段只出現一次，並且包含所有需要的函式
+import { 
+    collection, 
+    doc, 
+    setDoc, 
+    onSnapshot, 
+    query, 
+    orderBy, 
+    deleteDoc, 
+    where, 
+    updateDoc, 
+    arrayUnion, 
+    getDoc, 
+    writeBatch 
+} from 'firebase/firestore'
+
 import TripMain from './components/TripMain.vue'
 import draggable from 'vuedraggable'
-import { 
-    collection, doc, setDoc, onSnapshot, query, orderBy, deleteDoc, 
-    where, updateDoc, arrayUnion, getDoc, writeBatch // 👈 加入這個
-} from 'firebase/firestore'
 
 // --- 狀態定義 ---
 const user = ref(null)
@@ -179,41 +191,44 @@ const deleteTrip = async (id) => {
     if(currentTripId.value === id) currentTripId.value = null;
 }
 
+// src/App.vue 的 onMounted
+
 onMounted(() => {
     onAuthStateChanged(auth, (currentUser) => {
         user.value = currentUser;
         if (currentUser) {
-            // ✨ 修改 Query：移除 orderBy，我們改在前端排
+            // 1. 修改 Query：只過濾「跟自己有關的」，拿掉 orderBy
+            // 因為我們要用 JavaScript 在前端做更複雜的「混合排序」
             const q = query(
                 collection(db, "trips"), 
                 where("members", "array-contains", currentUser.uid)
-                // orderBy("createdAt", "desc") 👈 這行拿掉，因為我們要自訂排序
             );
             
             onSnapshot(q, (snapshot) => {
                 const rawList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 
-                // ✨ 關鍵邏輯：前端混合排序
-                // 如果有 'order' 欄位就用 order 排 (小到大)
-                // 如果沒有 'order' (舊資料)，就用 'createdAt' 排 (新到舊)
+                // ✨ 關鍵修正：前端混合排序邏輯
                 rawList.sort((a, b) => {
-                    // 兩者都有 order，直接比大小
+                    // 情況 A：兩者都有 'order' 欄位 (新資料或已拖拉過的)
+                    // -> 依照 order 數字「由小到大」排
                     if (a.order !== undefined && b.order !== undefined) {
-                        if (a.order === b.order) {
-                            return b.createdAt - a.createdAt;
-                        }
                         return a.order - b.order;
                     }
-                    // 其中一個有 order，有 order 的排前面 (或後面，看您喜好)
+
+                    // 情況 B：只有其中一個有 'order'
+                    // -> 有 order 的排前面 (這樣新整理的行程會置頂)
                     if (a.order !== undefined) return -1;
                     if (b.order !== undefined) return 1;
                     
-                    // 都沒有 order (舊資料)，用建立時間排
+                    // 情況 C：兩者都沒有 'order' (舊資料)
+                    // -> 依照 'createdAt' 建立時間「由新到舊」排
+                    // (這就是您原本想要的時間排序)
                     return b.createdAt - a.createdAt;
                 });
 
                 tripList.value = rawList;
 
+                // 如果有行程但沒選中，預設選第一個
                 if (tripList.value.length > 0 && !currentTripId.value) {
                     currentTripId.value = tripList.value[0].id;
                 }
