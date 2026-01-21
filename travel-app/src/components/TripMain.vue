@@ -14,7 +14,14 @@ const weather = ref({ temp: '', desc: '', error: false })
 const isWeatherLoading = ref(false)
 let unsubscribe = null
 
-// ✨ 核心邏輯：使用開源 API (wttr.in) 獲取真實天氣並驗證
+// ✨ 核心功能：複製行程代碼 (邀請碼)
+const copyInviteCode = () => {
+  if (!props.tripId) return
+  navigator.clipboard.writeText(props.tripId)
+  alert("行程代碼已複製！將此代碼傳給朋友，他們就能加入協作。")
+}
+
+// ✨ 天氣獲取邏輯 (wttr.in)
 const fetchWeather = async (city) => {
   if (!city) {
     weather.value = { temp: '', desc: '', error: false }
@@ -39,7 +46,6 @@ const fetchWeather = async (city) => {
       throw new Error("Location not found")
     }
   } catch (e) {
-    // 找不到地點時，直接顯示錯誤提示
     weather.value = { temp: '', desc: '地點錯誤', error: true }
   } finally {
     isWeatherLoading.value = false
@@ -106,32 +112,39 @@ onUnmounted(() => { if (unsubscribe) unsubscribe(); });
             <i class="ph-fill ph-currency-dollar text-lg"></i>
           </button>
         </div>
+        
         <div class="w-10"></div>
       </div>
 
       <div class="text-center space-y-3 px-4">
-        <h1 class="text-2xl font-black text-[#8B7E74] tracking-tight truncate">{{ details.setup.destination }}</h1>
+        <h1 class="text-2xl font-black text-[#8B7E74] tracking-tight truncate">
+          {{ details.setup.destination }}
+        </h1>
         
         <div class="flex items-center justify-center gap-2">
           <div class="flex items-center bg-white/60 px-3 py-1.5 rounded-full border border-[#E9E2D7] shadow-inner">
-            <i class="ph-fill ph-map-pin text-[#E6B3A3] text-xs"></i>
+            <i class="ph-fill ph-map-pin text-[#E6B3A3] text-xs shrink-0"></i>
             <input 
               v-model="details.setup.location" 
               @blur="updateLocation" 
-              placeholder="城市 (如: Yilan)" 
-              class="bg-transparent text-[11px] font-bold text-[#8B7E74] outline-none ml-1 w-24 placeholder:opacity-40"
+              placeholder="城市" 
+              class="bg-transparent text-[11px] font-bold text-[#8B7E74] outline-none ml-1 w-20 placeholder:opacity-40"
             >
           </div>
           
           <div v-if="weather.temp || weather.error" 
-               class="flex items-center gap-1.5 bg-white/80 px-3 py-1.5 rounded-full border shadow-sm animate-fade-in shrink-0"
+               class="flex items-center gap-1.5 bg-white/80 px-3 py-1.5 rounded-full border shadow-sm shrink-0 animate-fade-in"
                :class="weather.error ? 'border-red-100 bg-red-50/20' : 'border-[#F2EDE4]'">
             <span v-if="!weather.error" class="text-xs font-black text-[#E6B3A3]">{{ weather.temp }}</span>
             <span class="text-[10px] font-bold" :class="weather.error ? 'text-red-400' : 'text-[#BAB3A9]'">{{ weather.desc }}</span>
           </div>
-          <div v-else-if="isWeatherLoading" class="text-[10px] font-bold text-[#BAB3A9] animate-pulse italic shrink-0">
-            氣候連線中...
+          <div v-else-if="isWeatherLoading" class="text-[10px] font-bold text-[#BAB3A9] animate-pulse shrink-0">
+            查詢中...
           </div>
+
+          <button @click="copyInviteCode" class="w-8 h-8 bg-white border border-[#E9E2D7] rounded-full flex items-center justify-center text-[#BAB3A9] hover:text-[#E6B3A3] transition shadow-sm active:scale-90">
+            <i class="ph-bold ph-share-network"></i>
+          </button>
         </div>
       </div>
     </header>
@@ -153,5 +166,10 @@ onUnmounted(() => { if (unsubscribe) unsubscribe(); });
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-5px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* 確保行動端滾動順暢 */
+main {
+  -webkit-overflow-scrolling: touch;
 }
 </style>

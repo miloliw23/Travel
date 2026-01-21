@@ -4,7 +4,7 @@ import { auth } from '../firebase'
 import { signOut, updatePassword } from "firebase/auth"
 
 const props = defineProps(['user', 'sortedTripList', 'currentTripId', 'tripDetailsMap'])
-const emit = defineEmits(['close', 'switch', 'openCreate'])
+const emit = defineEmits(['close', 'switch', 'openCreate', 'openJoin'])
 
 const showPasswordModal = ref(false)
 const newPassword = ref("")
@@ -60,9 +60,14 @@ const handleLogout = () => {
         <i v-if="currentTripId === trip.id" class="ph-bold ph-check-circle text-xl"></i>
       </div>
 
-      <button @click="emit('openCreate')" class="w-full py-4 rounded-3xl border-2 border-dashed border-[#BAB3A9] text-[#BAB3A9] font-bold mt-4 text-sm hover:bg-white hover:border-[#E6B3A3] hover:text-[#E6B3A3] transition flex items-center justify-center gap-2">
-        <i class="ph-bold ph-plus-circle"></i> 建立新行程
-      </button>
+      <div class="pt-4 space-y-2">
+        <button @click="emit('openCreate')" class="w-full py-4 rounded-3xl border-2 border-dashed border-[#E6B3A3] text-[#E6B3A3] font-bold text-sm hover:bg-white transition flex items-center justify-center gap-2">
+          <i class="ph-bold ph-plus-circle"></i> 建立新行程
+        </button>
+        <button @click="emit('openJoin')" class="w-full py-4 rounded-3xl border-2 border-dashed border-[#BAB3A9] text-[#BAB3A9] font-bold text-sm hover:bg-white transition flex items-center justify-center gap-2">
+          <i class="ph-bold ph-users-three"></i> 加入朋友行程
+        </button>
+      </div>
     </div>
 
     <div class="mt-4 pt-4 border-t border-[#F2EDE4] flex flex-col gap-1">
@@ -76,24 +81,13 @@ const handleLogout = () => {
 
     <div v-if="showPasswordModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/30 backdrop-blur-sm">
       <div class="bg-white w-full max-w-sm rounded-[40px] p-8 shadow-2xl border-4 border-[#F2EDE4] text-center">
-        <div class="w-16 h-16 bg-[#FDFBF7] rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-[#F2EDE4]">
-          <i class="ph-bold ph-shield-check text-[#E6B3A3] text-3xl"></i>
-        </div>
-        <h3 class="font-black text-[#8B7E74] text-xl mb-2">更新登入密碼</h3>
-        <p class="text-[11px] text-[#BAB3A9] mb-6 font-bold uppercase tracking-widest">請輸入您的新密碼</p>
-        
-        <input v-model="newPassword" type="password" placeholder="至少 6 位字元" class="w-full bg-[#FAF8F5] px-6 py-4 rounded-2xl outline-none font-bold text-[#8B7E74] mb-6 border-2 border-transparent focus:border-[#E6B3A3] text-center">
-        
+        <h3 class="font-black text-[#8B7E74] text-xl mb-6">更新登入密碼</h3>
+        <input v-model="newPassword" type="password" placeholder="輸入新密碼" class="w-full bg-[#FAF8F5] px-6 py-4 rounded-2xl outline-none font-bold text-[#8B7E74] mb-6 border-2 border-transparent focus:border-[#E6B3A3] text-center">
         <div class="flex gap-4">
-          <button @click="showPasswordModal = false" class="flex-1 py-4 text-[#BAB3A9] font-bold hover:bg-[#FAF8F5] rounded-2xl transition">取消</button>
-          <button @click="handleUpdatePassword" class="flex-1 bg-[#E6B3A3] text-white py-4 rounded-2xl font-bold shadow-md hover:shadow-lg transition">確認更新</button>
+          <button @click="showPasswordModal = false" class="flex-1 py-4 text-[#BAB3A9] font-bold">取消</button>
+          <button @click="handleUpdatePassword" class="flex-1 bg-[#E6B3A3] text-white py-4 rounded-2xl font-bold shadow-md">確認更新</button>
         </div>
       </div>
     </div>
   </aside>
 </template>
-
-<style scoped>
-.custom-scroll::-webkit-scrollbar { width: 4px; }
-.custom-scroll::-webkit-scrollbar-thumb { background: #F2EDE4; border-radius: 10px; }
-</style>
