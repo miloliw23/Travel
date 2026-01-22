@@ -40,7 +40,7 @@ const handleForgotPassword = async () => {
 
 <template>
   <div class="flex flex-col items-center justify-center h-full p-8 bg-white w-full sm:w-[400px] sm:h-[80vh] sm:rounded-[40px] shadow-xl border-8 border-[#F2EDE4]">
-    <h1 class="text-3xl font-black mb-8 text-[#8B7E74]">行程管理系統</h1>
+    <h1 class="text-3xl font-black mb-8 text-[#8B7E74]">1MIN去旅遊</h1>
     
     <div class="w-full space-y-4">
       <div v-if="isRegisterMode" class="relative">
