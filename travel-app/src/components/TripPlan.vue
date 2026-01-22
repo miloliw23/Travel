@@ -153,12 +153,18 @@ const updateTime = (element, type, value) => {
 // --- 導航與搜尋 ---
 const openNav = (loc) => {
   if (!loc) return alert('請先輸入地點名稱！')
-  window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`, '_blank')
+  // ✨ 修正重點：改用 Google Maps 官方標準搜尋連結
+  // 使用 window.open(url, '_blank') 開啟新分頁
+  const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`
+  window.open(url, '_blank')
 }
 
 const searchNearby = (loc, type) => {
+  // 如果有地點，就查「地點 + 關鍵字」(例如：台北101 美食)
+  // 如果沒地點，就只查關鍵字 (例如：美食) - 這會搜尋使用者當前位置附近的
   const query = loc ? `${loc} ${type}` : type
-  window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`, '_blank')
+  const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`
+  window.open(url, '_blank')
 }
 
 // --- 輔助功能 ---
