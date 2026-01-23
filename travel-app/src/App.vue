@@ -44,17 +44,26 @@ const createNewTrip = async () => {
     const newId = 'trip_' + Date.now()
     const generatedDays = Array.from({ length: newTripData.value.daysCount }, () => ({ items: [], location: '' }))
     try {
+        // 1. 建立行程索引
         await setDoc(doc(db, "trips", newId), { 
             id: newId, 
             destination: newTripData.value.destination, 
             createdAt: Date.now(), 
             members: [user.value.uid] 
         })
+        
+        // 2. 建立詳細資料 (這裡修正！)
         await setDoc(doc(db, "trip_details", newId), {
             days: generatedDays,
-            checklists: [], // 初始化清單
-            setup: { destination: newTripData.value.destination, location: '', startDate: newTripData.value.startDate }
+            checklists: [], // ✅ 確保有清單欄位
+            expenses: [],   // ✅ 確保有分帳欄位 (之前漏了這個)
+            setup: { 
+                destination: newTripData.value.destination, 
+                location: '', 
+                startDate: newTripData.value.startDate 
+            }
         })
+        
         showCreateModal.value = false
         currentTripId.value = newId 
     } catch (e) { console.error("建立失敗:", e) }

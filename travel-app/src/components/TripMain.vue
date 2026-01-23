@@ -6,12 +6,12 @@ import { doc, onSnapshot, updateDoc } from 'firebase/firestore'
 // 引入子組件
 import TripPlan from './TripPlan.vue'
 import TripMoney from './TripMoney.vue'
-import TripChecklist from './TripChecklist.vue' // 🔥 1. 引入清單組件
+import TripChecklist from './TripChecklist.vue'
 
 const props = defineProps(['tripId'])
 const emit = defineEmits(['openMenu'])
 
-const activeTab = ref('plan') // 'plan' | 'checklist' | 'money'
+const activeTab = ref('plan') 
 const details = ref(null)
 const isHeaderShrunk = ref(false) 
 let unsubscribe = null
@@ -25,8 +25,7 @@ const updateDestination = async (newVal) => {
   } catch (e) { console.error("更新標題失敗:", e) }
 }
 
-// --- 🔥 2. 清單同步更新函式 ---
-// 當 TripChecklist 發出 @update 事件時呼叫此函式
+// --- 清單同步更新 ---
 const syncChecklist = async () => {
   if (!props.tripId || !details.value) return
   try {
@@ -34,6 +33,35 @@ const syncChecklist = async () => {
       checklists: details.value.checklists || []
     })
   } catch (e) { console.error("清單同步失敗:", e) }
+}
+
+// --- 🔥 自動修復缺漏欄位 🔥 ---
+const repairTripData = async (data) => {
+  let needsUpdate = false
+  const updatePayload = {}
+
+  if (!data.days) {
+     updatePayload.days = []
+     needsUpdate = true
+  }
+  if (!data.checklists) {
+     updatePayload.checklists = []
+     needsUpdate = true
+  }
+  if (!data.expenses) {
+     updatePayload.expenses = []
+     needsUpdate = true
+  }
+
+  // 如果發現有缺欄位，立刻寫回資料庫，永久修復它！
+  if (needsUpdate) {
+    console.log("🛠️ 偵測到舊行程資料結構不完整，正在自動修復...", updatePayload)
+    try {
+      await updateDoc(doc(db, "trip_details", props.tripId), updatePayload)
+    } catch (e) {
+      console.error("自動修復失敗 (可能是權限問題):", e)
+    }
+  }
 }
 
 // --- 資料監聽 ---
@@ -45,10 +73,23 @@ watch(() => props.tripId, (newId) => {
     unsubscribe = onSnapshot(doc(db, "trip_details", newId), (snap) => {
       if (snap.exists()) {
         const data = snap.data()
-        // 確保陣列存在，防止報錯
+        
+        // 1. 本地防呆 (確保畫面不壞掉)
         if (!data.days) data.days = []
-        if (!data.checklists) data.checklists = [] // 🔥 確保 checklists 存在
+        if (!data.checklists) data.checklists = []
+        if (!data.expenses) data.expenses = []
+
         details.value = data
+        
+        // 2. 觸發自動修復 (確保資料庫被修好)
+        // 注意：這裡傳入原始 snap.data() 檢查比較準確，但為了方便直接檢查處理過的 data 也可以
+        // 為了避免無限迴圈，repairTripData 內部只會在真的缺少時才 update
+        // 這裡我們稍微延遲一下執行修復，避免和讀取搶資源
+        setTimeout(() => repairTripData(snap.data()), 1000)
+
+      } else {
+        // 萬一完全找不到文件
+        details.value = { setup: {}, days: [], checklists: [], expenses: [] }
       }
     });
   }
@@ -112,7 +153,6 @@ onUnmounted(() => { if (unsubscribe) unsubscribe(); });
       <transition name="fade">
         
         <div v-if="details" class="h-full absolute inset-0 w-full" key="content">
-          
           <TripPlan 
             v-if="activeTab === 'plan'" 
             :key="tripId + '-plan'"
@@ -134,7 +174,6 @@ onUnmounted(() => { if (unsubscribe) unsubscribe(); });
             :details="details" 
             :tripId="tripId" 
           />
-          
         </div>
 
         <div v-else class="h-full flex flex-col items-center justify-center gap-3 bg-[#FDFBF7] absolute inset-0 w-full" key="loading">
@@ -148,11 +187,7 @@ onUnmounted(() => { if (unsubscribe) unsubscribe(); });
 </template>
 
 <style scoped>
-.fade-enter-active, .fade-leave-active { 
-  transition: opacity 0.2s ease; 
-}
-.fade-enter-from, .fade-leave-to { 
-  opacity: 0; 
-}
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 .h-full { height: 100dvh; }
 </style>
