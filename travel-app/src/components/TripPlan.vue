@@ -1,10 +1,10 @@
 <script setup>
-import { ref, nextTick, onMounted, watch } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import { db } from '../firebase'
 import { doc, updateDoc } from 'firebase/firestore'
 import draggable from 'vuedraggable'
-import TripChecklist from './TripChecklist.vue'
 
+// 只需要接收資料，不需要處理切換 Tab 了
 const props = defineProps(['details', 'tripId'])
 const emit = defineEmits(['shrink'])
 
@@ -15,7 +15,6 @@ const showImportModal = ref(false)
 const importText = ref('')
 const isEditingLoc = ref(false)
 const locInputRef = ref(null)
-const activeTab = ref('schedule') // 控制顯示 'schedule' (行程) 或 'checklist' (清單)
 
 // --- 時間設定 (00-23 時, 00-59 分) ---
 const hours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'))
@@ -32,9 +31,8 @@ const weatherCodeMap = {
   95: '雷雨', 96: '雷雨伴冰雹', 99: '暴雨伴冰雹'
 }
 
-// --- 初始化與監聽 ---
+// --- 初始化 ---
 onMounted(() => {
-  // 進入頁面時，如果有地點設定，自動查詢天氣
   if (props.details?.setup?.location) {
     fetchWeather(props.details.setup.location)
   }
@@ -57,17 +55,13 @@ const fetchWeather = async (inputCity) => {
     return 
   }
   
-  // 避免輸入無意義字元
   if (inputCity.length < 2 && !/^[a-zA-Z]+$/.test(inputCity) && !/[\u4e00-\u9fa5]/.test(inputCity)) {
      return 
   }
 
   weather.value.loading = true
-
-  // 1. 基礎字元修正 (台 -> 臺)
   let searchKeyword = inputCity.replace(/台/g, '臺')
-  
-  // 封裝查詢函式，方便重複呼叫
+
   const queryApi = async (keyword, lang = null) => {
     let url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(keyword)}&count=5&format=json`
     if (lang) url += `&language=${lang}`
@@ -76,10 +70,8 @@ const fetchWeather = async (inputCity) => {
   }
 
   try {
-    // 🔥 第一試：標準中文查詢
     let geoData = await queryApi(searchKeyword, 'zh')
 
-    // 🔥 第二試：智能後綴救援
     if (!geoData.results && searchKeyword.length === 2) {
       geoData = await queryApi(searchKeyword + '市', 'zh')
       if (!geoData.results) {
@@ -87,20 +79,16 @@ const fetchWeather = async (inputCity) => {
       }
     }
 
-    // 🔥 第三試：全域模糊查詢
     if (!geoData.results) {
        geoData = await queryApi(searchKeyword, null)
     }
 
-    // --- 結果處理 ---
     if (!geoData.results || geoData.results.length === 0) {
         weather.value = { temp: '?', desc: '未知', loading: false }
         return
     }
 
     const location = geoData.results[0]
-
-    // 步驟 2: 查詢天氣
     const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,weather_code&timezone=auto`
     const weatherRes = await fetch(weatherUrl)
     const weatherData = await weatherRes.json()
@@ -128,11 +116,8 @@ const enableLocEdit = () => {
 const saveLocation = async () => {
   isEditingLoc.value = false
   const loc = props.details?.setup?.location || ''
-  
-  // 1. 呼叫查詢
   fetchWeather(loc)
 
-  // 2. 同步回 Firebase
   try {
     await updateDoc(doc(db, "trip_details", props.tripId), {
        "setup.location": loc 
@@ -144,11 +129,9 @@ const saveLocation = async () => {
 const syncData = async () => {
   if (!props.tripId) return
   try {
-    // 同步 days 和 checklists 以及 location
+    // 這裡只需要同步 days，因為 checklists 已經移出去給 TripMain/TripChecklist 處理了
     await updateDoc(doc(db, "trip_details", props.tripId), { 
-      days: props.details.days || [],
-      checklists: props.details.checklists || [], // ★ 新增這行
-      "setup.location": props.details.setup?.location || '' 
+      days: props.details.days || []
     })
   } catch (e) { console.error("同步失敗", e) }
 }
@@ -157,7 +140,6 @@ const syncData = async () => {
 const addDay = () => {
   props.details.days.push({ items: [], location: '' })
   syncData()
-  // 自動切換到新的一天
   nextTick(() => {
     currentDayIdx.value = props.details.days.length - 1
   })
@@ -168,12 +150,10 @@ const deleteCurrentDay = async () => {
   
   props.details.days.splice(currentDayIdx.value, 1)
   
-  // 如果刪光了，至少留一天
   if (props.details.days.length === 0) {
     props.details.days.push({ items: [], location: '' })
   }
   
-  // 調整索引避免超出範圍
   if (currentDayIdx.value >= props.details.days.length) {
     currentDayIdx.value = Math.max(0, props.details.days.length - 1)
   }
@@ -190,13 +170,11 @@ const updateTime = (element, type, value) => {
 // --- 導航與搜尋 ---
 const openNav = (loc) => {
   if (!loc) return alert('請先輸入地點名稱！')
-  // ✨ 修正：使用 Google Maps 官方標準 Search URL
   const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`
   window.open(url, '_blank')
 }
 
 const searchNearby = (loc, type) => {
-  // 如果有地點，就查「地點 + 關鍵字」(例如：台北101 美食)
   const query = loc ? `${loc} ${type}` : type
   const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`
   window.open(url, '_blank')
@@ -236,7 +214,6 @@ const parseAndImport = () => {
   <div class="h-full flex flex-col bg-[#FDFBF7] text-[#8B7E74] overflow-hidden relative">
     
     <div 
-      v-show="activeTab === 'schedule'"
       class="bg-[#F2EDE4] px-4 rounded-b-[32px] shadow-sm shrink-0 z-30 transition-all duration-500 ease-in-out"
       :class="isShrinkActive ? 'py-2' : 'py-4'"
     >
@@ -261,169 +238,141 @@ const parseAndImport = () => {
     </div>
 
     <div class="flex-1 overflow-y-auto px-5 py-4 relative custom-scroll pb-2" @scroll="onScroll">
-      
-      <div v-show="activeTab === 'schedule'">
         
-        <div 
-          class="sticky top-0 z-20 bg-[#FDFBF7]/95 backdrop-blur-sm py-3 transition-all duration-300"
-          :class="isShrinkActive ? 'mb-4 border-b border-[#F2EDE4]' : 'mb-6'"
-        >
-          <div class="flex justify-between items-end">
-            <div class="flex flex-col min-w-0 relative">
-              <h2 class="font-black text-[#8B7E74] tracking-tight transition-all duration-300 leading-none flex items-center gap-2"
-                  :class="isShrinkActive ? 'text-2xl' : 'text-3xl'">
-                Day {{ currentDayIdx + 1 }}
-                <span class="text-sm font-bold text-[#BAB3A9] tracking-widest uppercase mt-1">{{ getDisplayDate(currentDayIdx) }}</span>
-              </h2>
+      <div 
+        class="sticky top-0 z-20 bg-[#FDFBF7]/95 backdrop-blur-sm py-3 transition-all duration-300"
+        :class="isShrinkActive ? 'mb-4 border-b border-[#F2EDE4]' : 'mb-6'"
+      >
+        <div class="flex justify-between items-end">
+          <div class="flex flex-col min-w-0 relative">
+            <h2 class="font-black text-[#8B7E74] tracking-tight transition-all duration-300 leading-none flex items-center gap-2"
+                :class="isShrinkActive ? 'text-2xl' : 'text-3xl'">
+              Day {{ currentDayIdx + 1 }}
+              <span class="text-sm font-bold text-[#BAB3A9] tracking-widest uppercase mt-1">{{ getDisplayDate(currentDayIdx) }}</span>
+            </h2>
 
-              <div class="flex items-center gap-2 mt-2 h-7">
-                <input 
-                  v-if="isEditingLoc"
-                  ref="locInputRef"
-                  :value="details.setup?.location"
-                  @input="e => details.setup.location = e.target.value"
-                  @blur="saveLocation"
-                  @keyup.enter="saveLocation"
-                  class="bg-white border border-[#E6B3A3] rounded-lg px-2 py-0.5 text-sm font-bold text-[#8B7E74] outline-none w-32 shadow-sm animate-fade-in"
-                  placeholder="輸入城市..."
-                />
+            <div class="flex items-center gap-2 mt-2 h-7">
+              <input 
+                v-if="isEditingLoc"
+                ref="locInputRef"
+                :value="details.setup?.location"
+                @input="e => details.setup.location = e.target.value"
+                @blur="saveLocation"
+                @keyup.enter="saveLocation"
+                class="bg-white border border-[#E6B3A3] rounded-lg px-2 py-0.5 text-sm font-bold text-[#8B7E74] outline-none w-32 shadow-sm animate-fade-in"
+                placeholder="輸入城市..."
+              />
+              
+              <div v-else @click="enableLocEdit" class="flex items-center gap-2 cursor-pointer group hover:bg-white px-2 py-1 -ml-2 rounded-xl transition-all">
+                <i class="ph-fill ph-map-pin text-[#E6B3A3] group-hover:scale-110 transition"></i>
+                <span class="text-sm font-bold text-[#8B7E74] border-b border-transparent group-hover:border-[#E6B3A3]/50 transition-colors">
+                    {{ details?.setup?.location || '設定地點' }}
+                </span>
                 
-                <div v-else @click="enableLocEdit" class="flex items-center gap-2 cursor-pointer group hover:bg-white px-2 py-1 -ml-2 rounded-xl transition-all">
-                  <i class="ph-fill ph-map-pin text-[#E6B3A3] group-hover:scale-110 transition"></i>
-                  <span class="text-sm font-bold text-[#8B7E74] border-b border-transparent group-hover:border-[#E6B3A3]/50 transition-colors">
-                      {{ details?.setup?.location || '設定地點' }}
-                  </span>
-                  
-                  <div v-if="weather.temp && !weather.loading" class="flex items-center gap-1.5 ml-1 bg-white px-2 py-0.5 rounded-full border border-[#F2EDE4] shadow-sm">
-                    <span class="text-xs font-black text-[#E6B3A3]">{{ weather.temp }}</span>
-                    <span class="text-[10px] font-bold text-[#BAB3A9]">{{ weather.desc }}</span>
-                  </div>
-                  <div v-if="weather.loading" class="ml-2">
-                      <i class="ph-bold ph-spinner animate-spin text-[#E6B3A3] text-sm"></i>
-                  </div>
+                <div v-if="weather.temp && !weather.loading" class="flex items-center gap-1.5 ml-1 bg-white px-2 py-0.5 rounded-full border border-[#F2EDE4] shadow-sm">
+                  <span class="text-xs font-black text-[#E6B3A3]">{{ weather.temp }}</span>
+                  <span class="text-[10px] font-bold text-[#BAB3A9]">{{ weather.desc }}</span>
+                </div>
+                <div v-if="weather.loading" class="ml-2">
+                    <i class="ph-bold ph-spinner animate-spin text-[#E6B3A3] text-sm"></i>
                 </div>
               </div>
-            </div>
-
-            <div class="flex items-center gap-2 mb-1">
-              <button @click="deleteCurrentDay" class="bg-white p-2.5 rounded-xl border border-[#F2EDE4] text-[#BAB3A9] hover:text-red-400 active:scale-95 transition-all shadow-sm">
-                <i class="ph-bold ph-trash text-lg"></i>
-              </button>
-              <button @click="copyInviteCode" class="bg-white p-2.5 rounded-xl border border-[#F2EDE4] text-[#BAB3A9] active:scale-95 transition-all shadow-sm">
-                <i class="ph-bold ph-share-network text-lg"></i>
-              </button>
-              <button v-show="!isShrinkActive" @click="showImportModal = true" class="bg-white px-3 py-2.5 rounded-xl border border-[#F2EDE4] text-[#E6B3A3] flex items-center gap-1 active:scale-95 transition-all shadow-sm">
-                <i class="ph-fill ph-magic-wand text-lg"></i>
-              </button>
             </div>
           </div>
+
+          <div class="flex items-center gap-2 mb-1">
+            <button @click="deleteCurrentDay" class="bg-white p-2.5 rounded-xl border border-[#F2EDE4] text-[#BAB3A9] hover:text-red-400 active:scale-95 transition-all shadow-sm">
+              <i class="ph-bold ph-trash text-lg"></i>
+            </button>
+            <button @click="copyInviteCode" class="bg-white p-2.5 rounded-xl border border-[#F2EDE4] text-[#BAB3A9] active:scale-95 transition-all shadow-sm">
+              <i class="ph-bold ph-share-network text-lg"></i>
+            </button>
+            <button v-show="!isShrinkActive" @click="showImportModal = true" class="bg-white px-3 py-2.5 rounded-xl border border-[#F2EDE4] text-[#E6B3A3] flex items-center gap-1 active:scale-95 transition-all shadow-sm">
+              <i class="ph-fill ph-magic-wand text-lg"></i>
+            </button>
+          </div>
         </div>
-
-        <div class="absolute left-[34px] top-28 bottom-20 w-[2px] bg-[#F2EDE4] z-0"></div>
-
-        <div v-if="details.days[currentDayIdx]?.items.length === 0" class="text-center py-8 opacity-50 relative z-10">
-           <p class="text-sm font-bold text-[#BAB3A9]">目前沒有行程，快去新增吧！</p>
-        </div>
-
-        <draggable 
-          v-if="details?.days && details.days[currentDayIdx]"
-          v-model="details.days[currentDayIdx].items" 
-          item-key="id" 
-          @end="syncData" 
-          handle=".drag-handle" 
-          class="space-y-4 z-10 relative pb-32" 
-        >
-          <template #item="{ element, index }">
-            <div class="relative pl-8 flex w-full animate-fade-in group">
-              
-              <div class="absolute left-[-5px] top-6 w-3.5 h-3.5 rounded-full border-[3px] border-[#FDFBF7] shadow-sm z-20 transition-colors"
-                  :class="index % 2 === 0 ? 'bg-[#E6B3A3]' : 'bg-[#D1C7BD]'"></div>
-              
-              <div class="bg-white rounded-[24px] p-4 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-[#F2EDE4] w-full hover:border-[#E6B3A3]/50 transition-colors">
-                <div class="flex items-start gap-3">
-                  
-                  <div class="flex items-center justify-center gap-0.5 bg-[#FAF8F5] px-2 py-3 rounded-xl border border-[#F2EDE4]/50 shrink-0 h-fit">
-                    <select :value="element.time?.split(':')[0] || '09'" @change="e => updateTime(element, 'h', e.target.value)" 
-                      class="bg-transparent font-black text-base outline-none text-[#8B7E74] appearance-none text-center cursor-pointer hover:text-[#E6B3A3] w-7 p-0 border-none focus:ring-0">
-                      <option v-for="h in hours" :key="h" :value="h">{{h}}</option>
-                    </select>
-                    <span class="text-[#D1C7BD] font-black text-sm relative -top-[1px]">:</span>
-                    <select :value="element.time?.split(':')[1] || '00'" @change="e => updateTime(element, 'm', e.target.value)" 
-                      class="bg-transparent font-black text-base outline-none text-[#8B7E74] appearance-none text-center cursor-pointer hover:text-[#E6B3A3] w-7 p-0 border-none focus:ring-0">
-                      <option v-for="m in minutes" :key="m" :value="m">{{m}}</option>
-                    </select>
-                  </div>
-
-                  <div class="flex-1 min-w-0 flex flex-col gap-2">
-                    <div>
-                      <input v-model="element.activity" @blur="syncData" placeholder="行程名稱" 
-                        class="text-lg font-black bg-transparent outline-none w-full text-[#8B7E74] placeholder-[#E0D8D0] mb-1">
-                      <div class="flex items-center gap-1.5 text-[#BAB3A9]">
-                        <i class="ph-fill ph-map-pin text-xs shrink-0"></i>
-                        <input v-model="element.location" @blur="syncData" placeholder="輸入地點以啟用導航..." 
-                          class="bg-transparent outline-none w-full text-xs font-bold text-[#8B7E74] placeholder-[#E0D8D0]">
-                      </div>
-                    </div>
-
-                    <div class="flex items-center gap-2 pt-1 overflow-x-auto no-scrollbar">
-                      <button @click="openNav(element.location)" 
-                        class="flex items-center gap-1 bg-[#FAF8F5] px-3 py-1.5 rounded-lg text-[10px] font-bold text-[#8B7E74] hover:bg-[#E6B3A3] hover:text-white transition-colors border border-[#F2EDE4] active:scale-95 shrink-0 shadow-sm">
-                        <i class="ph-fill ph-navigation-arrow"></i> 導航
-                      </button>
-                      <div class="w-[1px] h-3 bg-[#E9E2D7] shrink-0"></div>
-                      <div class="flex gap-1.5">
-                        <button @click="searchNearby(element.location, '美食')" class="bg-[#FAF8F5] w-7 h-7 rounded-lg flex items-center justify-center border border-[#F2EDE4] hover:border-[#E6B3A3] text-xs transition active:scale-95 shadow-sm text-[#8B7E74]" title="找餐廳">🍴</button>
-                        <button @click="searchNearby(element.location, '景點')" class="bg-[#FAF8F5] w-7 h-7 rounded-lg flex items-center justify-center border border-[#F2EDE4] hover:border-[#E6B3A3] text-xs transition active:scale-95 shadow-sm text-[#8B7E74]" title="找景點">🎡</button>
-                        <button @click="searchNearby(element.location, '飲料')" class="bg-[#FAF8F5] w-7 h-7 rounded-lg flex items-center justify-center border border-[#F2EDE4] hover:border-[#E6B3A3] text-xs transition active:scale-95 shadow-sm text-[#8B7E74]" title="找飲料">🧋</button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="flex flex-col gap-1 items-center pt-1 shrink-0">
-                      <button @click="details.days[currentDayIdx].items.splice(index, 1); syncData()" class="text-[#F2EDE4] hover:text-[#D98C8C] p-1 transition-colors">
-                        <i class="ph-bold ph-x text-sm"></i>
-                      </button>
-                      <div class="drag-handle cursor-grab p-1 text-[#E0D8D0] hover:text-[#8B7E74] transition-colors">
-                        <i class="ph-bold ph-dots-six-vertical text-lg"></i>
-                      </div>
-                  </div>
-
-                </div>
-              </div>
-            </div>
-          </template>
-        </draggable>
-
-        <button @click="details.days[currentDayIdx].items.push({id:Date.now(), time:'09:00', activity:'', location:'', type:'spot'}); syncData()"
-          class="w-full mt-4 py-4 bg-[#FAF8F5] border-2 border-dashed border-[#E9E2D7] rounded-[24px] text-[#BAB3A9] font-bold flex items-center justify-center gap-2 hover:bg-white hover:border-[#E6B3A3] hover:text-[#E6B3A3] transition-all mb-10">
-          <i class="ph-bold ph-plus-circle text-lg"></i>
-          <span class="text-sm">新增項目</span>
-        </button>
       </div>
 
-      <TripChecklist 
-        v-show="activeTab === 'checklist'" 
-        :checklists="details.checklists" 
-        @update="syncData" 
-      />
+      <div class="absolute left-[34px] top-28 bottom-20 w-[2px] bg-[#F2EDE4] z-0"></div>
 
-    </div>
+      <div v-if="details.days[currentDayIdx]?.items.length === 0" class="text-center py-8 opacity-50 relative z-10">
+          <p class="text-sm font-bold text-[#BAB3A9]">目前沒有行程，快去新增吧！</p>
+      </div>
 
-    <div class="bg-white border-t border-[#F2EDE4] px-6 py-3 pb-6 shadow-[0_-5px_20px_rgba(0,0,0,0.03)] z-40 shrink-0 flex gap-4">
-      <button @click="activeTab = 'schedule'" 
-        class="flex-1 flex flex-col items-center gap-1 transition-colors duration-300"
-        :class="activeTab === 'schedule' ? 'text-[#E6B3A3]' : 'text-[#D1C7BD] hover:text-[#BAB3A9]'">
-        <i :class="activeTab === 'schedule' ? 'ph-fill ph-calendar-check' : 'ph-bold ph-calendar-check'" class="text-2xl"></i>
-        <span class="text-[10px] font-bold tracking-wider">行程規劃</span>
-      </button>
-      
-      <div class="w-[1px] bg-[#F2EDE4] h-full my-auto"></div>
+      <draggable 
+        v-if="details?.days && details.days[currentDayIdx]"
+        v-model="details.days[currentDayIdx].items" 
+        item-key="id" 
+        @end="syncData" 
+        handle=".drag-handle" 
+        class="space-y-4 z-10 relative pb-32" 
+      >
+        <template #item="{ element, index }">
+          <div class="relative pl-8 flex w-full animate-fade-in group">
+            
+            <div class="absolute left-[-5px] top-6 w-3.5 h-3.5 rounded-full border-[3px] border-[#FDFBF7] shadow-sm z-20 transition-colors"
+                :class="index % 2 === 0 ? 'bg-[#E6B3A3]' : 'bg-[#D1C7BD]'"></div>
+            
+            <div class="bg-white rounded-[24px] p-4 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-[#F2EDE4] w-full hover:border-[#E6B3A3]/50 transition-colors">
+              <div class="flex items-start gap-3">
+                
+                <div class="flex items-center justify-center gap-0.5 bg-[#FAF8F5] px-2 py-3 rounded-xl border border-[#F2EDE4]/50 shrink-0 h-fit">
+                  <select :value="element.time?.split(':')[0] || '09'" @change="e => updateTime(element, 'h', e.target.value)" 
+                    class="bg-transparent font-black text-base outline-none text-[#8B7E74] appearance-none text-center cursor-pointer hover:text-[#E6B3A3] w-7 p-0 border-none focus:ring-0">
+                    <option v-for="h in hours" :key="h" :value="h">{{h}}</option>
+                  </select>
+                  <span class="text-[#D1C7BD] font-black text-sm relative -top-[1px]">:</span>
+                  <select :value="element.time?.split(':')[1] || '00'" @change="e => updateTime(element, 'm', e.target.value)" 
+                    class="bg-transparent font-black text-base outline-none text-[#8B7E74] appearance-none text-center cursor-pointer hover:text-[#E6B3A3] w-7 p-0 border-none focus:ring-0">
+                    <option v-for="m in minutes" :key="m" :value="m">{{m}}</option>
+                  </select>
+                </div>
 
-      <button @click="activeTab = 'checklist'" 
-        class="flex-1 flex flex-col items-center gap-1 transition-colors duration-300"
-        :class="activeTab === 'checklist' ? 'text-[#E6B3A3]' : 'text-[#D1C7BD] hover:text-[#BAB3A9]'">
-        <i :class="activeTab === 'checklist' ? 'ph-fill ph-list-checks' : 'ph-bold ph-list-checks'" class="text-2xl"></i>
-        <span class="text-[10px] font-bold tracking-wider">旅行清單</span>
+                <div class="flex-1 min-w-0 flex flex-col gap-2">
+                  <div>
+                    <input v-model="element.activity" @blur="syncData" placeholder="行程名稱" 
+                      class="text-lg font-black bg-transparent outline-none w-full text-[#8B7E74] placeholder-[#E0D8D0] mb-1">
+                    <div class="flex items-center gap-1.5 text-[#BAB3A9]">
+                      <i class="ph-fill ph-map-pin text-xs shrink-0"></i>
+                      <input v-model="element.location" @blur="syncData" placeholder="輸入地點以啟用導航..." 
+                        class="bg-transparent outline-none w-full text-xs font-bold text-[#8B7E74] placeholder-[#E0D8D0]">
+                    </div>
+                  </div>
+
+                  <div class="flex items-center gap-2 pt-1 overflow-x-auto no-scrollbar">
+                    <button @click="openNav(element.location)" 
+                      class="flex items-center gap-1 bg-[#FAF8F5] px-3 py-1.5 rounded-lg text-[10px] font-bold text-[#8B7E74] hover:bg-[#E6B3A3] hover:text-white transition-colors border border-[#F2EDE4] active:scale-95 shrink-0 shadow-sm">
+                      <i class="ph-fill ph-navigation-arrow"></i> 導航
+                    </button>
+                    <div class="w-[1px] h-3 bg-[#E9E2D7] shrink-0"></div>
+                    <div class="flex gap-1.5">
+                      <button @click="searchNearby(element.location, '美食')" class="bg-[#FAF8F5] w-7 h-7 rounded-lg flex items-center justify-center border border-[#F2EDE4] hover:border-[#E6B3A3] text-xs transition active:scale-95 shadow-sm text-[#8B7E74]" title="找餐廳">🍴</button>
+                      <button @click="searchNearby(element.location, '景點')" class="bg-[#FAF8F5] w-7 h-7 rounded-lg flex items-center justify-center border border-[#F2EDE4] hover:border-[#E6B3A3] text-xs transition active:scale-95 shadow-sm text-[#8B7E74]" title="找景點">🎡</button>
+                      <button @click="searchNearby(element.location, '飲料')" class="bg-[#FAF8F5] w-7 h-7 rounded-lg flex items-center justify-center border border-[#F2EDE4] hover:border-[#E6B3A3] text-xs transition active:scale-95 shadow-sm text-[#8B7E74]" title="找飲料">🧋</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="flex flex-col gap-1 items-center pt-1 shrink-0">
+                    <button @click="details.days[currentDayIdx].items.splice(index, 1); syncData()" class="text-[#F2EDE4] hover:text-[#D98C8C] p-1 transition-colors">
+                      <i class="ph-bold ph-x text-sm"></i>
+                    </button>
+                    <div class="drag-handle cursor-grab p-1 text-[#E0D8D0] hover:text-[#8B7E74] transition-colors">
+                      <i class="ph-bold ph-dots-six-vertical text-lg"></i>
+                    </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </template>
+      </draggable>
+
+      <button @click="details.days[currentDayIdx].items.push({id:Date.now(), time:'09:00', activity:'', location:'', type:'spot'}); syncData()"
+        class="w-full mt-4 py-4 bg-[#FAF8F5] border-2 border-dashed border-[#E9E2D7] rounded-[24px] text-[#BAB3A9] font-bold flex items-center justify-center gap-2 hover:bg-white hover:border-[#E6B3A3] hover:text-[#E6B3A3] transition-all mb-10">
+        <i class="ph-bold ph-plus-circle text-lg"></i>
+        <span class="text-sm">新增項目</span>
       </button>
     </div>
 
