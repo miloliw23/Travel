@@ -40,11 +40,15 @@ const sortedTripList = computed(() => {
 
 // --- ✨ 功能：建立新行程並自動切換 ---
 const createNewTrip = async () => {
+    // 1. 基本檢查
     if (!user.value || !newTripData.value.destination) return
+
+    // 2. 產生 ID 與空白天數
     const newId = 'trip_' + Date.now()
     const generatedDays = Array.from({ length: newTripData.value.daysCount }, () => ({ items: [], location: '' }))
+
     try {
-        // 1. 建立行程索引
+        // 3. 建立行程索引 (trips 集合)
         await setDoc(doc(db, "trips", newId), { 
             id: newId, 
             destination: newTripData.value.destination, 
@@ -52,11 +56,14 @@ const createNewTrip = async () => {
             members: [user.value.uid] 
         })
         
-        // 2. 建立詳細資料 (這裡修正！)
+        // 4. 建立詳細資料 (trip_details 集合)
+        // 🔥🔥🔥 這裡就是修正的關鍵！補上缺漏的欄位 🔥🔥🔥
         await setDoc(doc(db, "trip_details", newId), {
             days: generatedDays,
-            checklists: [], // ✅ 確保有清單欄位
-            expenses: [],   // ✅ 確保有分帳欄位 (之前漏了這個)
+            
+            checklists: [], // ✅ 確保新行程有清單功能
+            expenses: [],   // ✅ 確保新行程有分帳功能 (這是你之前缺少的)
+            
             setup: { 
                 destination: newTripData.value.destination, 
                 location: '', 
@@ -64,9 +71,14 @@ const createNewTrip = async () => {
             }
         })
         
+        // 5. 關閉視窗並切換
         showCreateModal.value = false
         currentTripId.value = newId 
-    } catch (e) { console.error("建立失敗:", e) }
+
+    } catch (e) { 
+        console.error("建立失敗:", e) 
+        alert("建立行程失敗，請稍後再試")
+    }
 }
 
 // --- ✨ 功能：加入朋友行程 ---
