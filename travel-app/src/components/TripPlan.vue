@@ -1,5 +1,5 @@
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted, watch } from 'vue'
 import { db } from '../firebase'
 import { doc, updateDoc } from 'firebase/firestore'
 import draggable from 'vuedraggable'
@@ -30,6 +30,14 @@ const weatherCodeMap = {
   95: '雷雨', 96: '雷雨伴冰雹', 99: '暴雨伴冰雹'
 }
 
+// --- 初始化與監聽 ---
+onMounted(() => {
+  // 進入頁面時，如果有地點設定，自動查詢天氣
+  if (props.details?.setup?.location) {
+    fetchWeather(props.details.setup.location)
+  }
+})
+
 // --- 滾動監聽 (Header縮小特效) ---
 const onScroll = (e) => {
   const scrollTop = e.target.scrollTop
@@ -57,8 +65,6 @@ const fetchWeather = async (inputCity) => {
   // 1. 基礎字元修正 (台 -> 臺)
   let searchKeyword = inputCity.replace(/台/g, '臺')
   
-  console.log(`🔍 查詢: "${inputCity}" (修正為: "${searchKeyword}")`)
-
   // 封裝查詢函式，方便重複呼叫
   const queryApi = async (keyword, lang = null) => {
     let url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(keyword)}&count=5&format=json`
@@ -71,32 +77,26 @@ const fetchWeather = async (inputCity) => {
     // 🔥 第一試：標準中文查詢
     let geoData = await queryApi(searchKeyword, 'zh')
 
-    // 🔥 第二試：智能後綴救援 (針對台灣地名：台北 -> 臺北市, 宜蘭 -> 宜蘭縣)
+    // 🔥 第二試：智能後綴救援
     if (!geoData.results && searchKeyword.length === 2) {
-      console.log(`⚠️ 查無 "${searchKeyword}"，嘗試加上[市]...`)
       geoData = await queryApi(searchKeyword + '市', 'zh')
-      
       if (!geoData.results) {
-         console.log(`⚠️ 查無 "${searchKeyword}市"，嘗試加上[縣]...`)
          geoData = await queryApi(searchKeyword + '縣', 'zh')
       }
     }
 
-    // 🔥 第三試：全域模糊查詢 (移除語言限制，針對國外地名)
+    // 🔥 第三試：全域模糊查詢
     if (!geoData.results) {
-       console.log(`⚠️ 中文查詢失敗，嘗試全域搜尋 (移除語言限制)...`)
        geoData = await queryApi(searchKeyword, null)
     }
 
     // --- 結果處理 ---
     if (!geoData.results || geoData.results.length === 0) {
-        console.warn(`😭 已嘗試所有方法，仍找不到: ${inputCity}`)
         weather.value = { temp: '?', desc: '未知', loading: false }
         return
     }
 
     const location = geoData.results[0]
-    console.log(`✅ 鎖定: ${location.name} (${location.latitude}, ${location.longitude})`)
 
     // 步驟 2: 查詢天氣
     const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,weather_code&timezone=auto`
@@ -127,7 +127,7 @@ const saveLocation = async () => {
   isEditingLoc.value = false
   const loc = props.details?.setup?.location || ''
   
-  // 1. 只有在這裡呼叫查詢 (避免 Watch 重複觸發)
+  // 1. 呼叫查詢
   fetchWeather(loc)
 
   // 2. 同步回 Firebase
@@ -144,6 +144,34 @@ const syncData = async () => {
   await updateDoc(doc(db, "trip_details", props.tripId), { days: props.details.days })
 }
 
+// --- 天數管理 ---
+const addDay = () => {
+  props.details.days.push({ items: [], location: '' })
+  syncData()
+  // 自動切換到新的一天
+  nextTick(() => {
+    currentDayIdx.value = props.details.days.length - 1
+  })
+}
+
+const deleteCurrentDay = async () => {
+  if (!confirm(`確定要刪除 Day ${currentDayIdx.value + 1} 的所有行程嗎？`)) return
+  
+  props.details.days.splice(currentDayIdx.value, 1)
+  
+  // 如果刪光了，至少留一天
+  if (props.details.days.length === 0) {
+    props.details.days.push({ items: [], location: '' })
+  }
+  
+  // 調整索引避免超出範圍
+  if (currentDayIdx.value >= props.details.days.length) {
+    currentDayIdx.value = Math.max(0, props.details.days.length - 1)
+  }
+  
+  syncData()
+}
+
 const updateTime = (element, type, value) => {
   const [h, m] = (element.time || "09:00").split(':')
   element.time = `${type === 'h' ? value : h}:${type === 'm' ? value : m}`
@@ -153,15 +181,13 @@ const updateTime = (element, type, value) => {
 // --- 導航與搜尋 ---
 const openNav = (loc) => {
   if (!loc) return alert('請先輸入地點名稱！')
-  // ✨ 修正重點：改用 Google Maps 官方標準搜尋連結
-  // 使用 window.open(url, '_blank') 開啟新分頁
+  // ✨ 修正：使用 Google Maps 官方標準 Search URL
   const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`
   window.open(url, '_blank')
 }
 
 const searchNearby = (loc, type) => {
   // 如果有地點，就查「地點 + 關鍵字」(例如：台北101 美食)
-  // 如果沒地點，就只查關鍵字 (例如：美食) - 這會搜尋使用者當前位置附近的
   const query = loc ? `${loc} ${type}` : type
   const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`
   window.open(url, '_blank')
@@ -204,7 +230,7 @@ const parseAndImport = () => {
       class="bg-[#F2EDE4] px-4 rounded-b-[32px] shadow-sm shrink-0 z-30 transition-all duration-500 ease-in-out"
       :class="isShrinkActive ? 'py-2' : 'py-4'"
     >
-      <div class="flex gap-2 overflow-x-auto no-scrollbar scroll-smooth touch-pan-x pl-1">
+      <div class="flex gap-2 overflow-x-auto no-scrollbar scroll-smooth touch-pan-x pl-1 items-center">
         <button v-for="(day, idx) in details?.days || []" :key="idx" 
           @click="currentDayIdx = idx"
           class="flex-shrink-0 rounded-[18px] border-2 flex flex-col items-center justify-center transition-all duration-300 relative overflow-hidden"
@@ -216,7 +242,7 @@ const parseAndImport = () => {
           <span class="font-black transition-all leading-none" :class="isShrinkActive ? 'text-sm' : 'text-xl'">{{ idx + 1 }}</span>
         </button>
         
-        <button @click="details.days.push({items:[], location:''}); syncData()" 
+        <button @click="addDay" 
           class="flex-shrink-0 border-2 border-dashed border-[#BAB3A9] text-[#BAB3A9] flex items-center justify-center transition-all duration-300 hover:bg-white hover:border-[#E6B3A3] hover:text-[#E6B3A3]"
           :class="isShrinkActive ? 'w-10 h-12 rounded-[16px]' : 'w-14 h-16 rounded-[18px]'">
           <i class="ph-bold ph-plus" :class="isShrinkActive ? 'text-sm' : 'text-xl'"></i>
@@ -252,11 +278,11 @@ const parseAndImport = () => {
               
               <div v-else @click="enableLocEdit" class="flex items-center gap-2 cursor-pointer group hover:bg-white px-2 py-1 -ml-2 rounded-xl transition-all">
                 <i class="ph-fill ph-map-pin text-[#E6B3A3] group-hover:scale-110 transition"></i>
-                <span class="text-sm font-bold text-[#8B7E74] border-b border-transparent group-hover:border-[#E6B3A3]/50 transition-colors">
+                <span class="text-sm font-bold text-[#8B7E74] border-b border-transparent group-hover:border-[#E6B3A3]/50 transition-colors truncate max-w-[120px]">
                     {{ details?.setup?.location || '設定地點' }}
                 </span>
                 
-                <div v-if="weather.temp && !weather.loading" class="flex items-center gap-1.5 ml-1 bg-white px-2 py-0.5 rounded-full border border-[#F2EDE4] shadow-sm">
+                <div v-if="weather.temp && !weather.loading" class="flex items-center gap-1.5 ml-1 bg-white px-2 py-0.5 rounded-full border border-[#F2EDE4] shadow-sm shrink-0">
                   <span class="text-xs font-black text-[#E6B3A3]">{{ weather.temp }}</span>
                   <span class="text-[10px] font-bold text-[#BAB3A9]">{{ weather.desc }}</span>
                 </div>
@@ -268,7 +294,10 @@ const parseAndImport = () => {
           </div>
 
           <div class="flex items-center gap-2 mb-1">
-            <button @click="copyInviteCode" class="bg-white p-2.5 rounded-xl border border-[#F2EDE4] text-[#BAB3A9] active:scale-95 transition-all shadow-sm">
+            <button @click="deleteCurrentDay" class="group bg-white p-2.5 rounded-xl border border-[#F2EDE4] text-[#BAB3A9] hover:border-red-200 hover:text-red-400 active:scale-95 transition-all shadow-sm" title="刪除此日行程">
+                <i class="ph-bold ph-trash text-lg"></i>
+            </button>
+            <button @click="copyInviteCode" class="bg-white p-2.5 rounded-xl border border-[#F2EDE4] text-[#BAB3A9] hover:text-[#E6B3A3] active:scale-95 transition-all shadow-sm">
               <i class="ph-bold ph-share-network text-lg"></i>
             </button>
             <button v-show="!isShrinkActive" @click="showImportModal = true" class="bg-white px-3 py-2.5 rounded-xl border border-[#F2EDE4] text-[#E6B3A3] flex items-center gap-1 active:scale-95 transition-all shadow-sm">
@@ -286,7 +315,7 @@ const parseAndImport = () => {
         item-key="id" 
         @end="syncData" 
         handle=".drag-handle" 
-        class="space-y-4 z-10 relative pb-32" 
+        class="space-y-4 z-10 relative pb-8 min-h-[100px]" 
       >
         <template #item="{ element, index }">
           <div class="relative pl-8 flex w-full animate-fade-in group">
@@ -294,7 +323,7 @@ const parseAndImport = () => {
             <div class="absolute left-[-5px] top-6 w-3.5 h-3.5 rounded-full border-[3px] border-[#FDFBF7] shadow-sm z-20 transition-colors"
                  :class="index % 2 === 0 ? 'bg-[#E6B3A3]' : 'bg-[#D1C7BD]'"></div>
             
-            <div class="bg-white rounded-[24px] p-4 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-[#F2EDE4] w-full hover:border-[#E6B3A3]/50 transition-colors">
+            <div class="bg-white rounded-[24px] p-4 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-[#F2EDE4] w-full hover:border-[#E6B3A3]/50 transition-colors group-hover:shadow-md">
               <div class="flex items-start gap-3">
                 
                 <div class="flex items-center justify-center gap-0.5 bg-[#FAF8F5] px-2 py-3 rounded-xl border border-[#F2EDE4]/50 shrink-0 h-fit">
@@ -312,11 +341,11 @@ const parseAndImport = () => {
                 <div class="flex-1 min-w-0 flex flex-col gap-2">
                   <div>
                     <input v-model="element.activity" @blur="syncData" placeholder="行程名稱" 
-                      class="text-lg font-black bg-transparent outline-none w-full text-[#8B7E74] placeholder-[#E0D8D0] mb-1">
+                      class="text-lg font-black bg-transparent outline-none w-full text-[#8B7E74] placeholder-[#E0D8D0] mb-1 focus:placeholder-[#E6B3A3]/50">
                     <div class="flex items-center gap-1.5 text-[#BAB3A9]">
                       <i class="ph-fill ph-map-pin text-xs shrink-0"></i>
                       <input v-model="element.location" @blur="syncData" placeholder="輸入地點以啟用導航..." 
-                        class="bg-transparent outline-none w-full text-xs font-bold text-[#8B7E74] placeholder-[#E0D8D0]">
+                        class="bg-transparent outline-none w-full text-xs font-bold text-[#8B7E74] placeholder-[#E0D8D0] focus:placeholder-[#E6B3A3]/50">
                     </div>
                   </div>
 
@@ -335,10 +364,10 @@ const parseAndImport = () => {
                 </div>
 
                 <div class="flex flex-col gap-1 items-center pt-1 shrink-0">
-                   <button @click="details.days[currentDayIdx].items.splice(index, 1); syncData()" class="text-[#F2EDE4] hover:text-[#D98C8C] p-1 transition-colors">
+                   <button @click="details.days[currentDayIdx].items.splice(index, 1); syncData()" class="text-[#E0D8D0] hover:text-[#D98C8C] p-1 transition-colors">
                      <i class="ph-bold ph-x text-sm"></i>
                    </button>
-                   <div class="drag-handle cursor-grab p-1 text-[#E0D8D0] hover:text-[#8B7E74] transition-colors">
+                   <div class="drag-handle cursor-grab p-1 text-[#E0D8D0] hover:text-[#8B7E74] transition-colors active:cursor-grabbing">
                      <i class="ph-bold ph-dots-six-vertical text-lg"></i>
                    </div>
                 </div>
@@ -349,8 +378,12 @@ const parseAndImport = () => {
         </template>
       </draggable>
 
+      <div v-if="details?.days && details.days[currentDayIdx]?.items.length === 0" class="text-center py-8 opacity-50">
+        <p class="text-sm font-bold text-[#BAB3A9]">目前沒有行程，快去新增吧！</p>
+      </div>
+
       <button @click="details.days[currentDayIdx].items.push({id:Date.now(), time:'09:00', activity:'', location:'', type:'spot'}); syncData()"
-        class="w-full mt-4 py-4 bg-[#FAF8F5] border-2 border-dashed border-[#E9E2D7] rounded-[24px] text-[#BAB3A9] font-bold flex items-center justify-center gap-2 hover:bg-white hover:border-[#E6B3A3] hover:text-[#E6B3A3] transition-all">
+        class="w-full mt-4 py-4 bg-[#FAF8F5] border-2 border-dashed border-[#E9E2D7] rounded-[24px] text-[#BAB3A9] font-bold flex items-center justify-center gap-2 hover:bg-white hover:border-[#E6B3A3] hover:text-[#E6B3A3] transition-all mb-32">
         <i class="ph-bold ph-plus-circle text-lg"></i>
         <span class="text-sm">新增項目</span>
       </button>
@@ -362,7 +395,7 @@ const parseAndImport = () => {
           <h2 class="text-lg font-black text-[#8B7E74]">快速匯入行程</h2>
           <button @click="showImportModal = false" class="bg-[#FAF8F5] p-2 rounded-full hover:bg-[#F2EDE4]"><i class="ph-bold ph-x text-[#BAB3A9]"></i></button>
         </div>
-        <textarea v-model="importText" class="w-full h-32 bg-[#FAF8F5] border border-[#E9E2D7] rounded-2xl p-4 text-xs outline-none mb-4 font-mono text-[#8B7E74] placeholder-[#D1C7BD]" placeholder="貼上文字..."></textarea>
+        <textarea v-model="importText" class="w-full h-32 bg-[#FAF8F5] border border-[#E9E2D7] rounded-2xl p-4 text-xs outline-none mb-4 font-mono text-[#8B7E74] placeholder-[#D1C7BD]" placeholder="請貼上 AI 生成的行程文字..."></textarea>
         <button @click="parseAndImport" class="w-full bg-[#E6B3A3] text-white py-3.5 rounded-2xl font-bold shadow-md active:scale-95 transition-all">確認匯入</button>
       </div>
     </div>
