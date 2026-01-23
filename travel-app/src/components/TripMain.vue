@@ -11,7 +11,7 @@ import TripChecklist from './TripChecklist.vue'
 const props = defineProps(['tripId'])
 const emit = defineEmits(['openMenu'])
 
-const activeTab = ref('plan') 
+const activeTab = ref('plan') // 'plan' | 'checklist' | 'money'
 const details = ref(null)
 const isHeaderShrunk = ref(false) 
 let unsubscribe = null
@@ -23,6 +23,23 @@ const updateDestination = async (newVal) => {
     await updateDoc(doc(db, "trip_details", props.tripId), { "setup.destination": newVal.trim() })
     await updateDoc(doc(db, "trips", props.tripId), { destination: newVal.trim() })
   } catch (e) { console.error("更新標題失敗:", e) }
+}
+
+// --- 🔥 日期同步更新 (新增功能) ---
+const updateStartDate = async (newDate) => {
+  if (!props.tripId || !newDate) return
+  try {
+    // 1. 更新詳細資料 (讓 TripPlan 變更)
+    await updateDoc(doc(db, "trip_details", props.tripId), {
+      "setup.startDate": newDate
+    })
+    
+    // 2. 🔥 新增這行：同時更新列表摘要 (讓側邊欄 Sidebar 變更)
+    await updateDoc(doc(db, "trips", props.tripId), {
+      startDate: newDate
+    })
+    
+  } catch (e) { console.error("更新日期失敗:", e) }
 }
 
 // --- 清單同步更新 ---
@@ -40,17 +57,14 @@ const repairTripData = async (data) => {
   let needsUpdate = false
   const updatePayload = {}
 
-  if (!data.days) {
-     updatePayload.days = []
-     needsUpdate = true
-  }
-  if (!data.checklists) {
-     updatePayload.checklists = []
-     needsUpdate = true
-  }
-  if (!data.expenses) {
-     updatePayload.expenses = []
-     needsUpdate = true
+  if (!data.days) { updatePayload.days = []; needsUpdate = true }
+  if (!data.checklists) { updatePayload.checklists = []; needsUpdate = true }
+  if (!data.expenses) { updatePayload.expenses = []; needsUpdate = true }
+  
+  // 檢查 setup 是否存在
+  if (!data.setup) { 
+      updatePayload.setup = { destination: '未命名行程', startDate: new Date().toISOString().split('T')[0] }
+      needsUpdate = true 
   }
 
   // 如果發現有缺欄位，立刻寫回資料庫，永久修復它！
@@ -78,17 +92,15 @@ watch(() => props.tripId, (newId) => {
         if (!data.days) data.days = []
         if (!data.checklists) data.checklists = []
         if (!data.expenses) data.expenses = []
+        if (!data.setup) data.setup = { destination: '', startDate: '' }
 
         details.value = data
         
-        // 2. 觸發自動修復 (確保資料庫被修好)
-        // 注意：這裡傳入原始 snap.data() 檢查比較準確，但為了方便直接檢查處理過的 data 也可以
-        // 為了避免無限迴圈，repairTripData 內部只會在真的缺少時才 update
-        // 這裡我們稍微延遲一下執行修復，避免和讀取搶資源
+        // 2. 觸發自動修復 (延遲執行避免搶資源)
         setTimeout(() => repairTripData(snap.data()), 1000)
 
       } else {
-        // 萬一完全找不到文件
+        // 萬一完全找不到文件，給預設值
         details.value = { setup: {}, days: [], checklists: [], expenses: [] }
       }
     });
@@ -113,7 +125,7 @@ onUnmounted(() => { if (unsubscribe) unsubscribe(); });
           <i class="ph-bold ph-list" :class="isHeaderShrunk ? 'text-lg' : 'text-xl'"></i>
         </button>
         
-        <div class="flex-1 min-w-0">
+        <div class="flex-1 min-w-0 flex flex-col justify-center">
           <input 
             v-model="details.setup.destination"
             @blur="updateDestination($event.target.value)"
@@ -122,6 +134,20 @@ onUnmounted(() => { if (unsubscribe) unsubscribe(); });
             :class="isHeaderShrunk ? 'text-base' : 'text-xl'"
             placeholder="點此輸入行程名稱..."
           />
+          
+          <div 
+            class="flex items-center gap-1.5 mt-0.5 group w-fit transition-all duration-300 origin-left"
+            :class="isHeaderShrunk ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'"
+          >
+            <i class="ph-bold ph-calendar-blank text-[#BAB3A9] text-xs group-hover:text-[#E6B3A3] transition-colors"></i>
+            <input 
+              type="date" 
+              :value="details.setup.startDate"
+              @input="e => details.setup.startDate = e.target.value"
+              @change="updateStartDate($event.target.value)"
+              class="bg-transparent text-[10px] font-bold text-[#BAB3A9] outline-none font-mono uppercase tracking-wider hover:text-[#E6B3A3] transition-colors cursor-pointer"
+            >
+          </div>
         </div>
 
         <div class="flex bg-white/60 rounded-xl p-1 border border-[#E9E2D7] shrink-0 transition-all duration-500 origin-right"
@@ -190,4 +216,18 @@ onUnmounted(() => { if (unsubscribe) unsubscribe(); });
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 .h-full { height: 100dvh; }
+
+/* 移除 date input 的預設 icon，讓介面更乾淨 */
+input[type="date"]::-webkit-calendar-picker-indicator {
+    opacity: 0;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+}
+input[type="date"] {
+    position: relative;
+}
 </style>

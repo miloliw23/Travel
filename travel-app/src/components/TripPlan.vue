@@ -163,7 +163,15 @@ const deleteCurrentDay = async () => {
 
 const updateTime = (element, type, value) => {
   const [h, m] = (element.time || "09:00").split(':')
+  
+  // 1. 更新時間 (這行原本就有)
   element.time = `${type === 'h' ? value : h}:${type === 'm' ? value : m}`
+  
+  // 🔥🔥🔥 2. 新增這段：自動排序邏輯 🔥🔥🔥
+  const currentItems = props.details.days[currentDayIdx.value].items
+  currentItems.sort((a, b) => a.time.localeCompare(b.time))
+
+  // 3. 同步回 Firebase (這行原本就有)
   syncData()
 }
 
@@ -182,10 +190,19 @@ const searchNearby = (loc, type) => {
 
 // --- 輔助功能 ---
 const getDisplayDate = (idx) => {
-  if (!props.details?.setup?.startDate) return ''
+  if (!props.details?.setup?.startDate) return '未定日期'
+  
+  // 將字串轉為日期物件
   const date = new Date(props.details.setup.startDate)
+  // 加上天數 (idx)
   date.setDate(date.getDate() + idx)
-  return `${date.getMonth() + 1}/${date.getDate()}`
+  
+  // 格式化為 yyyy/mm/dd
+  const y = date.getFullYear()
+  const m = (date.getMonth() + 1).toString().padStart(2, '0')
+  const d = date.getDate().toString().padStart(2, '0')
+  
+  return `${y}/${m}/${d}`
 }
 
 const copyInviteCode = () => {
@@ -237,7 +254,7 @@ const parseAndImport = () => {
       </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto px-5 py-4 relative custom-scroll pb-2" @scroll="onScroll">
+    <div class="flex-1 overflow-y-auto px-5 py-4 relative custom-scroll pb-24" @scroll="onScroll">
         
       <div 
         class="sticky top-0 z-20 bg-[#FDFBF7]/95 backdrop-blur-sm py-3 transition-all duration-300"
