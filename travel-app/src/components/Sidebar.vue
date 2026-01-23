@@ -1,14 +1,16 @@
 <script setup>
 import { ref } from 'vue'
-import { auth } from '../firebase'
+import { auth, db } from '../firebase' // 記得引入 db
 import { signOut, updatePassword } from "firebase/auth"
+import { writeBatch, doc } from "firebase/firestore"
 
 const props = defineProps(['user', 'sortedTripList', 'currentTripId', 'tripDetailsMap'])
-const emit = defineEmits(['close', 'switch', 'openCreate', 'openJoin'])
+const emit = defineEmits(['close', 'switch', 'openCreate', 'openJoin', 'delete'])
 
 const showPasswordModal = ref(false)
 const newPassword = ref("")
 
+// --- 修改密碼 ---
 const handleUpdatePassword = async () => {
   if (newPassword.value.length < 6) return alert("密碼長度需至少 6 位")
   try {
@@ -21,8 +23,37 @@ const handleUpdatePassword = async () => {
   }
 }
 
+// --- 登出 ---
 const handleLogout = () => {
   if (confirm('確定要登出帳號嗎？')) signOut(auth)
+}
+
+// --- 刪除行程 (新增功能) ---
+const deleteTrip = async (tripId, tripName) => {
+  if (!confirm(`確定要永久刪除「${tripName}」這個行程嗎？\n刪除後無法復原！`)) return
+
+  try {
+    const batch = writeBatch(db);
+    
+    // 1. 刪除詳細資料 (trip_details)
+    const detailsRef = doc(db, "trip_details", tripId);
+    batch.delete(detailsRef);
+
+    // 2. 刪除行程概覽 (trips) - 這是為了清乾淨，不留殭屍資料
+    const tripRef = doc(db, "trips", tripId);
+    batch.delete(tripRef);
+
+    // 執行批次刪除
+    await batch.commit();
+    
+    // 通知父層更新畫面
+    emit('delete', tripId)
+    alert(`行程「${tripName}」已完全刪除`)
+
+  } catch (e) {
+    console.error("刪除失敗", e)
+    alert(`刪除失敗：${e.message}`)
+  }
 }
 </script>
 
@@ -47,17 +78,30 @@ const handleLogout = () => {
     </div>
 
     <div class="flex-1 overflow-y-auto space-y-3 custom-scroll pr-1">
-      <div v-for="trip in sortedTripList" :key="trip.id" @click="emit('switch', trip.id)" 
-        class="p-4 rounded-3xl border-2 transition-all cursor-pointer flex justify-between items-center"
+      <div v-for="trip in sortedTripList" :key="trip.id" 
+        @click="emit('switch', trip.id)" 
+        class="group p-4 rounded-3xl border-2 transition-all cursor-pointer flex justify-between items-center relative overflow-hidden"
         :class="currentTripId === trip.id ? 'bg-[#E6B3A3] border-[#E6B3A3] text-white shadow-lg' : 'bg-white border-[#F2EDE4] hover:border-[#E6B3A3]'">
-        <div class="flex flex-col text-left">
-          <span class="font-bold text-sm truncate w-40">{{ trip.destination }}</span>
+        
+        <div class="flex flex-col text-left min-w-0">
+          <span class="font-bold text-sm truncate w-36">{{ trip.destination }}</span>
           <span class="text-[9px] opacity-70 flex items-center gap-1 mt-0.5">
             <i class="ph-bold ph-calendar"></i>
-            {{ tripDetailsMap[trip.id]?.setup?.startDate?.replace(/-/g, '/') }}
+            {{ tripDetailsMap[trip.id]?.setup?.startDate?.replace(/-/g, '/') || '未定日期' }}
           </span>
         </div>
-        <i v-if="currentTripId === trip.id" class="ph-bold ph-check-circle text-xl"></i>
+
+        <div class="flex items-center gap-2">
+          <i v-if="currentTripId === trip.id" class="ph-bold ph-check-circle text-xl"></i>
+          
+          <button 
+            @click.stop="deleteTrip(trip.id, trip.destination)" 
+            class="p-2 rounded-full hover:bg-white/20 active:scale-95 transition opacity-0 group-hover:opacity-100"
+            :class="currentTripId === trip.id ? 'text-white hover:text-red-100' : 'text-[#BAB3A9] hover:bg-[#F2EDE4] hover:text-red-400'"
+            title="刪除此行程">
+            <i class="ph-bold ph-trash text-lg"></i>
+          </button>
+        </div>
       </div>
 
       <div class="pt-4 space-y-2">
@@ -91,3 +135,8 @@ const handleLogout = () => {
     </div>
   </aside>
 </template>
+
+<style scoped>
+.custom-scroll::-webkit-scrollbar { width: 4px; }
+.custom-scroll::-webkit-scrollbar-thumb { background: #E6B3A3; border-radius: 10px; }
+</style>

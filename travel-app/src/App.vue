@@ -10,7 +10,7 @@ import {
 // 引入拆分組件
 import AuthView from './components/AuthView.vue'
 import Sidebar from './components/Sidebar.vue'
-import TripMain from './components/TripMain.vue'
+import TripMain from './components/TripMain.vue' // 假設你有這個組件，或是原本的 TripPlan
 
 // --- 狀態定義 ---
 const user = ref(null)
@@ -52,10 +52,11 @@ const createNewTrip = async () => {
         })
         await setDoc(doc(db, "trip_details", newId), {
             days: generatedDays,
+            checklists: [], // 初始化清單
             setup: { destination: newTripData.value.destination, location: '', startDate: newTripData.value.startDate }
         })
         showCreateModal.value = false
-        currentTripId.value = newId // 建立完立即切換，解決卡死問題
+        currentTripId.value = newId 
     } catch (e) { console.error("建立失敗:", e) }
 }
 
@@ -73,6 +74,23 @@ const handleJoinTrip = async () => {
     } catch (e) { alert("加入失敗") }
 }
 
+// --- 🔥🔥🔥 新增功能：處理刪除邏輯 🔥🔥🔥 ---
+const handleDeleteTrip = (deletedId) => {
+    // 1. 從本地列表移除該行程 (讓 UI 立即更新，不用等 onSnapshot)
+    rawTripList.value = rawTripList.value.filter(trip => trip.id !== deletedId)
+    
+    // 2. 如果刪除的是當前正在看的行程
+    if (currentTripId.value === deletedId) {
+        if (rawTripList.value.length > 0) {
+            // 如果還有其他行程，切換到第一個
+            currentTripId.value = rawTripList.value[0].id
+        } else {
+            // 如果沒行程了，設為 null (會觸發 template 裡的 v-else 顯示空狀態)
+            currentTripId.value = null
+        }
+    }
+}
+
 // --- 初始化監聽 ---
 onMounted(() => {
     onAuthStateChanged(auth, (currentUser) => {
@@ -81,10 +99,19 @@ onMounted(() => {
             const q = query(collection(db, "trips"), where("members", "array-contains", currentUser.uid))
             onSnapshot(q, (snapshot) => {
                 rawTripList.value = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+                
+                // 如果當前選中的行程被別人刪除了，也要做防呆處理
+                if (currentTripId.value && !rawTripList.value.find(t => t.id === currentTripId.value)) {
+                    currentTripId.value = rawTripList.value.length > 0 ? rawTripList.value[0].id : null
+                }
+
+                // 獲取詳細資料 (日期等)
                 rawTripList.value.forEach(async (trip) => {
                     const detailSnap = await getDoc(doc(db, "trip_details", trip.id))
                     if (detailSnap.exists()) tripDetailsMap.value[trip.id] = detailSnap.data()
                 })
+                
+                // 如果剛載入且沒有選中行程，自動選第一個
                 if (rawTripList.value.length > 0 && !currentTripId.value) {
                     currentTripId.value = rawTripList.value[0].id
                 }
@@ -93,6 +120,7 @@ onMounted(() => {
     })
 })
 </script>
+
 <template>
   <div class="h-[100dvh] w-screen flex flex-col sm:items-center sm:justify-center bg-[#FDFBF7] overflow-hidden">
     
@@ -111,6 +139,7 @@ onMounted(() => {
                 @switch="id => { currentTripId = id; isSidebarOpen = false }"
                 @openCreate="isSidebarOpen = false; showCreateModal = true"
                 @openJoin="isSidebarOpen = false; showJoinModal = true"
+                @delete="handleDeleteTrip" 
             />
         </transition>
 
